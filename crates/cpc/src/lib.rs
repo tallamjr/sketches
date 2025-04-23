@@ -1,15 +1,35 @@
 // crates/cpc/src/lib.rs
-use std::hash::{Hash, Hasher};
-pub struct CpcSketch {/* … */}
+use std::hash::Hash;
+use hll::HllSketch;
+
+/// CPC Sketch for approximate distinct counting, delegated to HyperLogLog.
+pub struct CpcSketch {
+    inner: HllSketch,
+}
+
 impl CpcSketch {
-    pub fn new(lg_k: u8) -> Self { /* … */
+    /// Create a new CPC sketch with log2(k) specified by lg_k.
+    pub fn new(lg_k: u8) -> Self {
+        CpcSketch { inner: HllSketch::new(lg_k) }
     }
-    pub fn update<T: Hash>(&mut self, item: &T) { /* … */
+
+    /// Update the sketch with an item implementing Hash.
+    pub fn update<T: Hash>(&mut self, item: &T) {
+        self.inner.update(item);
     }
-    pub fn estimate(&self) -> f64 { /* … */
+
+    /// Estimate the cardinality.
+    pub fn estimate(&self) -> f64 {
+        self.inner.estimate()
     }
-    pub fn merge(&mut self, other: &CpcSketch) { /* … */
+
+    /// Merge another CPC sketch into this one (in-place union).
+    pub fn merge(&mut self, other: &CpcSketch) {
+        self.inner.merge(&other.inner);
     }
-    pub fn to_bytes(&self) -> Vec<u8> { /* … */
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.inner.to_bytes()
     }
 }
