@@ -1,0 +1,12 @@
+[package]
+name = "sketches"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [
+    "crates/cpc",
+    "crates/hll",
+    "crates/theta",
+    "py-sketches",
+]

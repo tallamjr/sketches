@@ -1,0 +1,16 @@
+# py-datasketches/Cargo.toml
+[package]
+name = "py-sketches"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "datasketches"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.18", features = ["extension-module"] }
+cpc = { path = "../crates/cpc" }
+hll = { path = "../crates/hll" }
+theta = { path = "../crates/theta" }
+
