@@ -1,4 +1,7 @@
 /target
+/tests/data
+/tests/par-*
+
 # General
 .DS_Store
 .AppleDouble

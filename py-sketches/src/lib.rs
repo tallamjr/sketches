@@ -8,7 +8,7 @@ use theta::ThetaSketch as RustTheta;
 // … and so on for AOD, KLL, Quantiles, FrequentStrings
 
 #[pymodule]
-fn datasketches(py: Python, m: &PyModule) -> PyResult<()> {
+fn sketches(py: Python, m: &PyModule) -> PyResult<()> {
     /// CPC Sketch
     #[pyclass]
     struct CpcSketch {
@@ -83,12 +83,12 @@ fn datasketches(py: Python, m: &PyModule) -> PyResult<()> {
         }
         fn union(&self, other: &ThetaSketch) -> ThetaSketch {
             ThetaSketch {
-                sketch: RustTheta::union(&[&self.sketch, &other.sketch], self.sketch.k),
+                sketch: RustTheta::union_many(&[&self.sketch, &other.sketch], self.sketch.k),
             }
         }
         fn intersect(&self, other: &ThetaSketch) -> ThetaSketch {
             ThetaSketch {
-                sketch: RustTheta::intersect(&self.sketch, &other.sketch, self.sketch.k),
+                sketch: RustTheta::intersect_many(&self.sketch, &other.sketch, self.sketch.k),
             }
         }
         fn difference(&self, other: &ThetaSketch) -> ThetaSketch {

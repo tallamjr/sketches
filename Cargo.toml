@@ -10,3 +10,9 @@ members = [
     "crates/theta",
     "py-sketches",
 ]
+
+[dependencies]
+csv = "1"
+cpc = { path = "crates/cpc" }
+hll = { path = "crates/hll" }
+theta = { path = "crates/theta" }

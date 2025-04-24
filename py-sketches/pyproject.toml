@@ -18,6 +18,9 @@ classifiers = [
   "Programming Language :: Rust",
   "License :: OSI Approved :: Apache Software License",
 ]
+dependencies = [
+    "pytest>=8.3.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/your-org/datasketches-rs"
@@ -30,6 +33,7 @@ dev = [
 ]
 
 [tool.maturin]
+bindings = "pyo3"
 module-name = "sketches"
 # Optionally include extra files in sdist or wheel
 # include = [{ path = "rust-toolchain.toml", format = "sdist" }]
