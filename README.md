@@ -2,7 +2,8 @@
 
 Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3.
 
-> ![NOTE]
+> [!Note]
+>
 > This project layout is inspired by the Polars project. I thought a mini
 > project on probabilistic data structures would be cool way to play around with
 > using performant Rust but with a nice Python feel — let's see how things turn
