@@ -59,6 +59,10 @@ fn sketches(py: Python, m: &PyModule) -> PyResult<()> {
         fn merge(&mut self, other: &HllSketch) {
             self.sketch.merge(&other.sketch);
         }
+        /// Serialize the HLL sketch registers to bytes.
+        fn to_bytes<'p>(&self, py: Python<'p>) -> &'p PyBytes {
+            PyBytes::new(py, &self.sketch.to_bytes())
+        }
     }
     m.add_class::<HllSketch>()?;
 

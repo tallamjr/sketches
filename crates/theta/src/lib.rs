@@ -137,4 +137,10 @@ impl ThetaSketch {
         heap.push(0u64);
         ThetaSketch { k: 2, heap, theta, seen: HashSet::new() }
     }
+    /// Return capacity of the underlying sample data vector.
+    /// Useful for estimating memory usage of the sketch.
+    pub fn sample_capacity(&self) -> usize {
+        let vec: Vec<_> = self.heap.clone().into_vec();
+        vec.capacity()
+    }
 }

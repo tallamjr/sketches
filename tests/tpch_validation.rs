@@ -6,6 +6,20 @@ use std::error::Error;
 use cpc::CpcSketch;
 use hll::HllSketch;
 use theta::ThetaSketch;
+use std::sync::Once;
+use tracing::{info, Level};
+use tracing_subscriber;
+
+static INIT: Once = Once::new();
+
+/// Initialise tracing subscriber for logging once.
+fn init_logging() {
+    INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_max_level(Level::INFO)
+            .init();
+    });
+}
 
 fn load_column(path: &str, column: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)?;
@@ -24,6 +38,7 @@ fn load_column(path: &str, column: &str) -> Result<Vec<String>, Box<dyn Error>> 
 
 #[test]
 fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
+    init_logging();
     let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
     let truth: HashSet<_> = data.iter().cloned().collect();
     let true_count = truth.len() as f64;
@@ -41,11 +56,27 @@ fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
         est,
         true_count
     );
+    // Log memory usage: naive vs probabilistic sketch
+    let naive_cap = truth.capacity();
+    let naive_mem = naive_cap * std::mem::size_of::<String>();
+    info!("Naive HashSet capacity = {}, approx mem = {} bytes", naive_cap, naive_mem);
+    let sketch_bytes = sk.to_bytes();
+    let sk_cap = sketch_bytes.capacity();
+    let sk_mem = sk_cap * std::mem::size_of::<u8>();
+    info!("CPC sketch capacity = {}, mem = {} bytes", sk_cap, sk_mem);
+    // Compare memory: sketch must use less memory than naive set
+    assert!(
+        sk_mem < naive_mem,
+        "CPC sketch uses {} bytes, which is not less than naive {} bytes",
+        sk_mem,
+        naive_mem
+    );
     Ok(())
 }
 
 #[test]
 fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
+    init_logging();
     let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
     let truth: HashSet<_> = data.iter().cloned().collect();
     let true_count = truth.len() as f64;
@@ -63,11 +94,27 @@ fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
         est,
         true_count
     );
+    // Log memory usage: naive vs probabilistic sketch
+    let naive_cap = truth.capacity();
+    let naive_mem = naive_cap * std::mem::size_of::<String>();
+    info!("Naive HashSet capacity = {}, approx mem = {} bytes", naive_cap, naive_mem);
+    let sketch_bytes = sk.to_bytes();
+    let sk_cap = sketch_bytes.capacity();
+    let sk_mem = sk_cap * std::mem::size_of::<u8>();
+    info!("HLL sketch capacity = {}, mem = {} bytes", sk_cap, sk_mem);
+    // Compare memory: sketch must use less memory than naive set
+    assert!(
+        sk_mem < naive_mem,
+        "HLL sketch uses {} bytes, which is not less than naive {} bytes",
+        sk_mem,
+        naive_mem
+    );
     Ok(())
 }
 
 #[test]
 fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
+    init_logging();
     let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
     // Partition data into two subsets by alternating entries to ensure overlapping keys
     let mut p1 = Vec::new();
@@ -108,7 +155,20 @@ fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
         est_u,
         true_u
     );
-
-
+    // Log memory usage: naive union vs probabilistic union sketch
+    let naive_union: HashSet<_> = s1.union(&s2).cloned().collect();
+    let naive_cap = naive_union.capacity();
+    let naive_mem = naive_cap * std::mem::size_of::<String>();
+    info!("Naive union HashSet capacity = {}, approx mem = {} bytes", naive_cap, naive_mem);
+    let sk_cap = sk_union.sample_capacity();
+    let sk_mem = sk_cap * std::mem::size_of::<u64>();
+    info!("Theta union sample capacity = {}, mem = {} bytes", sk_cap, sk_mem);
+    // Compare memory: Theta union sketch must use less memory than naive union set
+    assert!(
+        sk_mem < naive_mem,
+        "Theta union sketch uses {} bytes, which is not less than naive {} bytes",
+        sk_mem,
+        naive_mem
+    );
     Ok(())
 }

@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 
 import pytest
+import logging
 
 # Determine the directory containing the test data
 DATA_DIR = Path(__file__).parent.parent.parent / "tests" / "data"
@@ -31,6 +32,7 @@ def test_sketch_on_region(sketch_class, column, true_rel_err):
     Test that each sketch implementation estimates the number
     of distinct values in the region.csv file within tolerance.
     """
+    logging.info("Testing %s on column '%s' with tolerance %f", sketch_class, column, true_rel_err)
     # Dynamically import the sketch class from the Python extension module
     import sketches as ds
 
@@ -39,6 +41,7 @@ def test_sketch_on_region(sketch_class, column, true_rel_err):
     data = load_column("region.csv", column)
     # Compute true distinct count
     true_count = len(set(data))
+    logging.info("True distinct count: %d", true_count)
     # Instantiate sketch with default parameters
     sk = sketch_cls()
     # Update sketch
@@ -48,6 +51,7 @@ def test_sketch_on_region(sketch_class, column, true_rel_err):
     est = sk.estimate()
     # Compute relative error
     rel_err = abs(est - true_count) / true_count
+    logging.info("%s estimate: %s, true: %s, rel_err: %.6f", sketch_class, est, true_count, rel_err)
     assert (
         rel_err <= true_rel_err
     ), f"{sketch_class} err >{true_rel_err*100}%: est {est}, true {true_count}"
