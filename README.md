@@ -48,6 +48,34 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 
 <!-- mtoc-end -->
 
+## Table of Contents
+
+<!-- mtoc-start -->
+
+* [Background: Probabilistic Data Structures](#background-probabilistic-data-structures)
+  * [A Cardinality Conundrum](#a-cardinality-conundrum)
+  * [Database Superpowers: Query Planning & GROUP BY](#database-superpowers-query-planning--group-by)
+  * [How HLL Works at a Glance](#how-hll-works-at-a-glance)
+  * [A Rust Example: `hll::HllSketch` in Action](#a-rust-example-hllhllsketch-in-action)
+  * [HyperLogLog++: Beyond the Basics](#hyperloglog-beyond-the-basics)
+  * [Implications & the Big Picture](#implications--the-big-picture)
+* [Memory Usage Comparison](#memory-usage-comparison)
+* [Package Installation](#package-installation)
+  * [Prerequisites](#prerequisites)
+  * [From PyPI (if available)](#from-pypi-if-available)
+  * [From Source](#from-source)
+* [Library Usage](#library-usage)
+  * [HLL Sketch Example](#hll-sketch-example)
+    * [Minimal Test with Polars](#minimal-test-with-polars)
+  * [CPC Sketch Example](#cpc-sketch-example)
+    * [Minimal Test with Polars](#minimal-test-with-polars-1)
+* [Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation](#extending-hll-sparse-buffer-variable-length-encoding-and-hybrid-representation)
+  * [Theta Sketch Example](#theta-sketch-example)
+    * [Minimal Test with Polars](#minimal-test-with-polars-2)
+* [License](#license)
+
+<!-- mtoc-end -->
+
 ## Background: Probabilistic Data Structures
 
 Probabilistic data structures such as HyperLogLog (HLL), Compressed Counting (CPC)
