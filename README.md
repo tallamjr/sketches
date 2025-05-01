@@ -16,6 +16,8 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 - **HllSketch**: HyperLogLog sketch for cardinality estimation.
 - **ThetaSketch**: K-minimum values sketch (Theta Sketch) supporting union, intersection, difference.
 
+## Table of Contents
+
 <!-- mtoc-start -->
 
 * [Background: Probabilistic Data Structures](#background-probabilistic-data-structures)
