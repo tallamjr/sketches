@@ -77,3 +77,7 @@ impl HllSketch {
         self.registers.clone()
     }
 }
+
+mod pp;
+pub use pp::HllPlusPlusSketch;
+pub use pp::HllPlusPlusSparseSketch;
