@@ -28,11 +28,11 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
   * [HyperLogLog++: Beyond the Basics](#hyperloglog-beyond-the-basics)
   * [Implications & the Big Picture](#implications--the-big-picture)
 * [Memory Usage Comparison](#memory-usage-comparison)
-* [Installation](#installation)
+* [Package Installation](#package-installation)
   * [Prerequisites](#prerequisites)
   * [From PyPI (if available)](#from-pypi-if-available)
   * [From Source](#from-source)
-* [Usage](#usage)
+* [Library Usage](#library-usage)
   * [HLL Sketch Example](#hll-sketch-example)
     * [Minimal Test with Polars](#minimal-test-with-polars)
   * [CPC Sketch Example](#cpc-sketch-example)
@@ -181,7 +181,7 @@ This example will typically show tens of megabytes for the Python set versus
 just a few kilobytes for the HLL sketch, showcasing the memory efficiency of
 probabilistic data structures.
 
-## Installation
+## Package Installation
 
 ### Prerequisites
 
@@ -211,7 +211,7 @@ For an editable install with development dependencies:
 pip install -e .[dev]
 ```
 
-## Usage
+## Library Usage
 
 Import the module:
 
