@@ -1,8 +1,11 @@
+# Example Usage
+
+```python
 import polars as pl
 from sketches import ThetaSketch
 
 # Read data (adjust the path as needed)
-df = pl.read_csv("../tests/data/customer.csv")
+df = pl.read_csv("../../tests/data/customer.csv")
 
 # Select column
 column = "c_custkey"
@@ -49,3 +52,6 @@ print(f"Estimated difference size (Theta): {difference.estimate():.2f}")
 # Estimated intersection size (Theta): 0.00
 # Actual difference size: 75000
 # Estimated difference size (Theta): 74830.45
+
+
+```

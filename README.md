@@ -21,11 +21,9 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 <!-- mtoc-start -->
 
 * [Background: Probabilistic Data Structures](#background-probabilistic-data-structures)
-  * [A Cardinality Conundrum](#a-cardinality-conundrum)
-  * [Database Superpowers: Query Planning & GROUP BY](#database-superpowers-query-planning--group-by)
+  * [The Cardinality Conundrum](#the-cardinality-conundrum)
+  * [Database Superpowers: Query Planning & `GROUP BY` Operations](#database-superpowers-query-planning--group-by-operations)
   * [How HLL Works at a Glance](#how-hll-works-at-a-glance)
-  * [A Rust Example: `hll::HllSketch` in Action](#a-rust-example-hllhllsketch-in-action)
-  * [HyperLogLog++: Beyond the Basics](#hyperloglog-beyond-the-basics)
   * [Implications & the Big Picture](#implications--the-big-picture)
 * [Memory Usage Comparison](#memory-usage-comparison)
 * [Package Installation](#package-installation)
@@ -49,77 +47,62 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 Probabilistic data structures such as HyperLogLog (HLL), Compressed Counting (CPC)
 sketches, and Theta sketches provide approximate answers (e.g., cardinality
 estimates) while using significantly less memory compared to exact methods.
+
 For example, to count the number of unique elements in a dataset of millions of
 items, a conventional approach (e.g., using a hash set or a DataFrame’s unique
-operation) must store every unique value in memory, resulting in O(N) space.
-In contrast, an HLL sketch uses a fixed-size array of registers (2^k registers,
-each a few bits), requiring only O(2^k) space, independent of N. With k = 12
+operation) must store every unique value in memory, resulting in $O(N)$ space.
+
+In contrast, an HLL sketch uses a fixed-size array of registers ($2^k$ registers,
+each a few bits), requiring only $O(2^k)$ space, independent of $N$. With $k = 12$
 (the default in this library), HLL needs just 4096 registers (≈3 KB of memory)
 yet can estimate cardinalities of millions of items with only a few percent error.
 
-### A Cardinality Conundrum
+### The Cardinality Conundrum
 
 Imagine you’re the DBA for a high-traffic website tracking unique visitors (by IP)
 every month. If 1.44 billion visits happen with an average of 10 pages each, that’s
 ~12 billion rows of IPs. Checking uniqueness exactly (sorting or hashing all) would
 gobble up hundreds of gigabytes of RAM and take ages—yet we only need an estimate.
 
-Enter **HyperLogLog**. It treats the input as a stream of hashed values and
-records only a tiny “sketch” of the data. By observing _leading-zero patterns_
+Enter **HyperLogLog**. It treats the input as a _stream_ of hashed values and
+records only a tiny **"sketch"** of the data. By observing _leading-zero patterns_
 in those hash values (a rare long run of zeros suggests many distinct inputs),
-HLL collects these patterns across many buckets and applies a harmonic-mean
-formula (with bias correction) to deliver an approximate count. The magic: **HLL
-uses tiny memory** (e.g., 12 KB for 4096 counters) and still achieves ~1% error.
+HLL collects these patterns across many "buckets" and applies a Harmonic-Mean
+formula (with bias correction) to deliver an approximate count.
 
-> **Tip:** HLL excels when you need a fast, memory-frugal answer and can tolerate
-> a small error (e.g., ±2%). It’s _much_ cheaper than exact counting at Big Data
-> scales, and many systems (Snowflake, Presto/Trino, Redis’s `PFCOUNT`,
-> PostgreSQL’s `hyperloglog` extension) bake HLL directly into their engines.
+Why is this so cool? It uses a tiny amount of memory (e.g., 12 KB for 4096
+counters) and still achieves ~1\% error! I know, awesome right?!
 
-### Database Superpowers: Query Planning & GROUP BY
+HLL excels when you need a fast, memory-frugal answer and can tolerate a small
+error (e.g., ±2%). It’s _much_ cheaper than exact counting at Big Data scales,
+and many systems
+([Trino](https://trino.io/docs/current/functions/hyperloglog.html), [Redis’s
+`PFCOUNT`](https://redis.io/docs/latest/develop/data-types/probabilistic/hyperloglogs/),
+[PostgreSQL’s
+`hyperloglog`](https://github.com/postgres/postgres/blob/master/src/backend/lib/hyperloglog.c)
+extension) bake HLL directly into their engines.
+
+### Database Superpowers: Query Planning & `GROUP BY` Operations
 
 Approximate distinct counts guide query planners to choose efficient execution
 strategies. For example, most SQL engines must decide between a hash-based
 aggregation (fast but memory heavy) and a pipelined sort/group (low memory but
 requires sorted input). A wrong guess by orders of magnitude wastes resources.
-By feeding HLL-based estimates (e.g., “This group has ~10 million unique values”)
-into the optimizer, systems like Vertica, PostgreSQL, and Snowflake select
-better plans and avoid costly spills or full-table scans.
+
+By feeding HLL-based estimates (e.g., "This group has ~10 million unique values")
+into the optimiser, systems like [Vertica](https://en.wikipedia.org/wiki/Vertica), PostgreSQL, and Snowflake select
+better plans and avoid costly spills to disk or full-table scans.
 
 ### How HLL Works at a Glance
 
-- Hash each input to a 64-bit value.
-- Use the first p bits to select one of 2^p registers.
-- Count leading zeros in the remaining bits (plus one) as the “rank.”
-- Store the maximum rank per register.
-- Estimate cardinality via a bias-corrected harmonic mean across registers.
+1. Hash each input to a `32-bit` value.
+2. Use the first $p$ bits to select one of $2^p$ registers.
+3. Count leading zeros in the remaining bits (plus one) as the "rank".
+4. Store the maximum rank per register.
+5. Estimate cardinality via a bias-corrected harmonic mean across registers.
 
-### A Rust Example: `hll::HllSketch` in Action
-
-```rust
-use hll::HllSketch;
-
-// Create a new HyperLogLog with precision p = 12 (4096 registers)
-let mut hll = HllSketch::new(12);
-
-// Add elements (hashing is internal)
-for id in 1u64..100_000u64 {
-    hll.update(&id);
-}
-
-// Merge another sketch from a different partition
-let mut hll2 = HllSketch::new(12);
-for id in 50_000u64..150_000u64 {
-    hll2.update(&id);
-}
-hll.merge(&hll2);
-
-// Get the approximate unique count
-let estimate: f64 = hll.estimate();
-println!("Estimated unique elements: {:.0}", estimate);
-```
-
-### HyperLogLog++: Beyond the Basics
+This was taken further by [Stefan Heule et. al](https://research.google/pubs/hyperloglog-in-practice-algorithmic-engineering-of-a-state-of-the-art-cardinality-estimation-algorithm/)
+who introduced the HyperLogLog++ algorithm.
 
 HLL++ refines the original algorithm with:
 
@@ -132,18 +115,17 @@ trillion-element workloads.
 
 ### Implications & the Big Picture
 
-HyperLogLog sketches let Big Data systems _reason about size cheaply_. Whether you’re
-building a Rust microservice with the `hll` crate or a Python app using this
-library’s `HllSketch`, you can sketch your data, merge across partitions, and get
-fast, memory-efficient distinct counts—trading a dash of accuracy for massive speed
-and scale.
+HyperLogLog sketches let Big Data systems _reason about size cheaply_ and one
+can sketch data, merge across partitions, and get fast, memory-efficient
+distinct counts—trading a dash of accuracy for massive speed and scale.
 
 ## Memory Usage Comparison
 
-The following Python code illustrates the dramatic memory savings when using an
-HLL sketch instead of an exact method (e.g., a Python set or Polars unique) for
-counting unique values in a large dataset. It uses `psutil` to measure process
-memory before and after operations:
+The following code, which uses the `sketches` library implemented in this repo,
+illustrates the memory savings when using an HLL sketch instead of an exact
+method (e.g., a Python set or Polars unique) for counting unique values in a
+large dataset. It uses `psutil` to measure process memory before and after
+operations:
 
 ```python
 # pip install psutil
@@ -177,6 +159,15 @@ print(f"Exact unique: {len(unique_set)}")
 print(f"HLL estimate: {sketch.estimate():.2f}")
 ```
 
+```
+$ python memtest.py
+Memory used by Python set: 2445.36 MB
+Memory used by HLL sketch: 192.00 KB  # <--- 👀
+Exact unique: 100000000
+HLL estimate: 98559344.17
+
+```
+
 This example will typically show tens of megabytes for the Python set versus
 just a few kilobytes for the HLL sketch, showcasing the memory efficiency of
 probabilistic data structures.
@@ -185,8 +176,7 @@ probabilistic data structures.
 
 ### Prerequisites
 
-- Python 3.10 or higher.
-- Rust toolchain (rustc and cargo). Install from https://rustup.rs.
+- Python 3.10+
 - Optionally, for DataFrame examples: `polars` (`pip install polars`).
 
 - Optionally, for memory measurement examples: `psutil` (`pip install psutil`).
