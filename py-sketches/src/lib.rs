@@ -108,5 +108,7 @@ fn sketches(py: Python, m: &PyModule) -> PyResult<()> {
     // m.add_class::<QuantilesSketch>()?;
     // m.add_class::<FrequentStringsSketch>()?;
 
+    // Build info
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
