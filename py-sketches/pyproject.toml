@@ -5,9 +5,9 @@ requires = ["maturin>=1.3.2"]
 build-backend = "maturin"
 
 [project]
-name = "sketches"
+name = "rusty-sketches"
 version = "0.1.0"
-description = "Python bindings for Rust Sketches implementations via PyO3"
+description = "Python bindings for Sketches implemented in Rust via PyO3"
 readme = "README.md"
 authors = [
   { name = "Tarek Allam", email = "t.allam.jr@gmail.com" },
@@ -36,8 +36,8 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = ""
-Repository = ""
+Homepage = "https://github.com/tallamjr/sketches"
+Repository = "https://github.com/tallamjr/sketches"
 
 [project.optional-dependencies]
 # “dev” extras for development tools (e.g. to allow `pip install .[dev]`)
