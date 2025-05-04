@@ -16,6 +16,16 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 - **HllSketch**: HyperLogLog sketch for cardinality estimation.
 - **ThetaSketch**: K-minimum values sketch (Theta Sketch) supporting union, intersection, difference.
 
+| Sketch                                  | Description                                                                    | Status |
+| --------------------------------------- | ------------------------------------------------------------------------------ | :----: |
+| CPC sketch                              | Very compact (smaller than HLL when serialized) distinct-counting sketch       |   🚧   |
+| HLL sketch                              | Very compact distinct-counting sketch based on HyperLogLog algorithm           |   ✅   |
+| Theta sketch                            | Distinct counting with set operations (union, intersection, a-not-b)           |   ✅   |
+| Array Of Doubles (AOD) sketch           | A kind of Tuple sketch with an array of double values associated with each key |   🔴   |
+| KLL (float and double) quantiles sketch | For estimating distributions: quantile, rank, PMF (histogram), CDF             |   🔴   |
+| Quantiles sketch                        | Inferior to KLL; for long-term support of data sets                            |   🔴   |
+| Frequent strings sketch                 | Captures the heaviest items (strings) by count or by some other weight         |   🔴   |
+
 ## Table of Contents
 
 <!-- mtoc-start -->
@@ -184,7 +194,7 @@ probabilistic data structures.
 ### From PyPI (if available)
 
 ```bash
-pip install sketches
+pip install rusty-sketches
 ```
 
 ### From Source
@@ -441,4 +451,4 @@ print(f"Estimated difference size (Theta): {difference.estimate():.2f}")
 
 ## License
 
-This project is licensed under the Apache-2.0 License (see `pyproject.toml`).
+This project is licensed under the MIT License (see `pyproject.toml`).
