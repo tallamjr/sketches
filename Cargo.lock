@@ -168,16 +168,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "py-sketches"
-version = "0.1.0"
-dependencies = [
- "cpc",
- "hll",
- "pyo3",
- "theta",
-]
-
-[[package]]
 name = "pyo3"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -253,6 +243,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f103c6d277498fbceb16e84d317e2a400f160f46904d5f5410848c829511a3"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "rusty-sketches"
+version = "0.1.0"
+dependencies = [
+ "cpc",
+ "hll",
+ "pyo3",
+ "theta",
 ]
 
 [[package]]
