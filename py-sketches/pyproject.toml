@@ -6,7 +6,6 @@ build-backend = "maturin"
 
 [project]
 name = "rusty-sketches"
-version = "0.1.0"
 description = "Python bindings for Sketches implemented in Rust via PyO3"
 readme = "README.md"
 authors = [
