@@ -2,6 +2,7 @@
 name = "sketches"
 version = "0.1.6"
 edition = "2024"
+name = "sketches"
 
 [dependencies]
 pyo3 = { version = "0.24.0", features = ["extension-module"], optional = true }
