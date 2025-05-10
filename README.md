@@ -12,10 +12,6 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
 
 ## Features
 
-- **CpcSketch**: Compressed Counting Sketch for cardinality estimation.
-- **HllSketch**: HyperLogLog sketch for cardinality estimation.
-- **ThetaSketch**: K-minimum values sketch (Theta Sketch) supporting union, intersection, difference.
-
 | Sketch                                  | Description                                                                    | Status |
 | --------------------------------------- | ------------------------------------------------------------------------------ | :----: |
 | CPC sketch                              | Very compact (smaller than HLL when serialized) distinct-counting sketch       |   🚧   |
