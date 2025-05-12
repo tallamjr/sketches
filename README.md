@@ -142,8 +142,8 @@ from sketches import HllSketch
 
 process = psutil.Process(os.getpid())
 
-# Generate a DataFrame with 1 million integer IDs
-df = pl.DataFrame({"id": range(1_000_000)})
+# Generate a DataFrame with 100 million integer IDs
+df = pl.DataFrame({"id": range(100_000_000)})
 
 # Measure exact unique count using a Python set
 values = df["id"].to_list()

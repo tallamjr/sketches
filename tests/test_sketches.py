@@ -5,7 +5,7 @@ import pytest
 import logging
 
 # Determine the directory containing the test data
-DATA_DIR = Path(__file__).parent.parent.parent / "tests" / "data"
+DATA_DIR = Path(__file__).parent / "data"
 
 
 def load_column(file_name, column):

@@ -1,6 +1,4 @@
-//! Theta sketch for approximate set cardinality and set operations.
 use std::collections::BinaryHeap;
-use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -10,14 +8,13 @@ pub struct ThetaSketch {
     pub k: usize,
     heap: BinaryHeap<u64>,
     theta: u64,
-    /// Set of hashed values seen to skip duplicates in update.
-    seen: HashSet<u64>,
+    // Note: duplicates are skipped by checking the heap, so no separate seen set is stored.
 }
 
 impl ThetaSketch {
     /// Create a new Theta sketch with sample size k.
     pub fn new(k: usize) -> Self {
-        ThetaSketch { k, heap: BinaryHeap::new(), theta: u64::MAX, seen: HashSet::new() }
+        ThetaSketch { k, heap: BinaryHeap::new(), theta: u64::MAX }
     }
 
     /// Update the sketch with an item implementing Hash.
@@ -25,7 +22,7 @@ impl ThetaSketch {
         let mut hasher = DefaultHasher::new();
         item.hash(&mut hasher);
         let hash = hasher.finish();
-        // Skip duplicate hashed values to ensure unique sampling
+        // Skip duplicate hashed values to ensure unique sampling (heap scan)
         if self.heap.iter().any(|&v| v == hash) {
             return;
         }
@@ -69,7 +66,7 @@ impl ThetaSketch {
             }
         }
         values.sort_unstable();
-        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta: u64::MAX, seen: HashSet::new() };
+        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta: u64::MAX };
         for &v in values.iter().take(k) {
             result.heap.push(v);
         }
@@ -87,7 +84,7 @@ impl ThetaSketch {
             .cloned()
             .collect();
         values.sort_unstable();
-        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta, seen: HashSet::new() };
+        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta };
         for &v in values.iter().take(k) {
             result.heap.push(v);
         }
@@ -105,7 +102,7 @@ impl ThetaSketch {
             .cloned()
             .collect();
         values.sort_unstable();
-        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta, seen: HashSet::new() };
+        let mut result = ThetaSketch { k, heap: BinaryHeap::new(), theta };
         for &v in values.iter().take(k) {
             result.heap.push(v);
         }
@@ -123,22 +120,19 @@ impl ThetaSketch {
     /// Intersection of two sketches with the same capacity.
     /// Approximate intersection cardinality using inclusion-exclusion for improved accuracy.
     pub fn intersect(&self, other: &ThetaSketch) -> ThetaSketch {
-        // Estimate cardinalities of individual sketches and their union
         let est_a = self.estimate();
         let est_b = other.estimate();
         let est_u = self.union(other).estimate();
-        // Inclusion-exclusion: |A ∩ B| ≈ |A| + |B| - |A ∪ B|
         let est_i = est_a + est_b - est_u;
-        // Build a synthetic sketch that returns est_i from estimate()
         let theta = (u64::MAX as f64 / est_i) as u64;
         let mut heap = BinaryHeap::new();
         // Two dummy entries to use full-sample branch in estimate()
         heap.push(0u64);
         heap.push(0u64);
-        ThetaSketch { k: 2, heap, theta, seen: HashSet::new() }
+        ThetaSketch { k: 2, heap, theta }
     }
+
     /// Return capacity of the underlying sample data vector.
-    /// Useful for estimating memory usage of the sketch.
     pub fn sample_capacity(&self) -> usize {
         let vec: Vec<_> = self.heap.clone().into_vec();
         vec.capacity()

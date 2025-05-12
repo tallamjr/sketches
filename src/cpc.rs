@@ -1,6 +1,5 @@
-// crates/cpc/src/lib.rs
 use std::hash::Hash;
-use hll::HllSketch;
+use crate::hll::HllSketch;
 
 /// CPC Sketch for approximate distinct counting, delegated to HyperLogLog.
 pub struct CpcSketch {

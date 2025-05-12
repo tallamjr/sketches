@@ -3,9 +3,9 @@ use csv::ReaderBuilder;
 use std::collections::HashSet;
 use std::error::Error;
 
-use cpc::CpcSketch;
-use hll::HllSketch;
-use theta::ThetaSketch;
+use sketches::cpc::CpcSketch;
+use sketches::hll::HllSketch;
+use sketches::theta::ThetaSketch;
 use std::sync::Once;
 use tracing::{info, Level};
 use tracing_subscriber;
