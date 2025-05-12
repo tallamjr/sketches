@@ -32,7 +32,7 @@ classifiers = [
 dependencies = [
 ]
 
-dynamic = ["version"]
+	version = "0.1.5"
 
 [project.urls]
 Homepage = "https://github.com/tallamjr/sketches"
