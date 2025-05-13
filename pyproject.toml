@@ -32,7 +32,7 @@ classifiers = [
 dependencies = [
 ]
 
-dynamic = ["version"]
+	version = "0.1.5"
 
 [project.urls]
 Homepage = "https://github.com/tallamjr/sketches"
@@ -48,9 +48,11 @@ dev = [
   "twine",
 ]
 
-[tool.maturin]
+[tool.maturin] # Maturin settings: build Python extension with the Rust 'extension-module' feature
 bindings = "pyo3"
 module-name = "sketches"
+	features = ["extension-module"]
+	out = "dist"
 
 # Optionally include extra files in sdist or wheel
 include = [{ path = "rust-toolchain.toml", format = "sdist" }]
