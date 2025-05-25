@@ -12,6 +12,7 @@ pub mod countmin;
 pub mod cpc;
 pub mod hll;
 pub mod pp;
+pub mod quantiles;
 pub mod theta;
 
 /// Python binding for CPC sketch.
@@ -488,6 +489,112 @@ impl CountSketch {
     }
 }
 
+/// Python binding for KLL Sketch.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "KllSketch")]
+pub struct KllSketch {
+    inner: quantiles::KllSketch<f64>,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl KllSketch {
+    /// Create a new KLL sketch with parameter k.
+    #[new]
+    fn new(k: Option<usize>) -> Self {
+        KllSketch {
+            inner: quantiles::KllSketch::new(k.unwrap_or(200)),
+        }
+    }
+
+    /// Create a KLL sketch with specified accuracy.
+    #[staticmethod]
+    fn with_accuracy(epsilon: f64, confidence: f64) -> Self {
+        KllSketch {
+            inner: quantiles::KllSketch::with_accuracy(epsilon, confidence),
+        }
+    }
+
+    /// Update the sketch with a new value.
+    pub fn update(&mut self, value: f64) -> PyResult<()> {
+        self.inner.update(value);
+        Ok(())
+    }
+
+    /// Get quantile for the given rank (0.0 to 1.0).
+    pub fn quantile(&mut self, rank: f64) -> Option<f64> {
+        self.inner.quantile(rank)
+    }
+
+    /// Get the rank of a given value (0.0 to 1.0).
+    pub fn rank(&mut self, value: f64) -> f64 {
+        self.inner.rank(&value)
+    }
+
+    /// Merge another KLL sketch into this one.
+    pub fn merge(&mut self, other: &mut KllSketch) -> PyResult<()> {
+        self.inner.merge(&mut other.inner);
+        Ok(())
+    }
+
+    /// Get the total number of items processed.
+    pub fn count(&self) -> u64 {
+        self.inner.count()
+    }
+
+    /// Check if the sketch is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Get the minimum value seen.
+    pub fn min(&self) -> Option<f64> {
+        self.inner.min().copied()
+    }
+
+    /// Get the maximum value seen.
+    pub fn max(&self) -> Option<f64> {
+        self.inner.max().copied()
+    }
+
+    /// Get sketch statistics as a dictionary.
+    pub fn statistics(&self, py: Python) -> PyObject {
+        let stats = self.inner.statistics();
+        let dict = py.import("builtins").unwrap().getattr("dict").unwrap().call0().unwrap();
+        
+        dict.set_item("k", stats.k).unwrap();
+        dict.set_item("levels", stats.levels).unwrap();
+        dict.set_item("total_items", stats.total_items).unwrap();
+        dict.set_item("total_count", stats.total_count).unwrap();
+        dict.set_item("memory_usage", stats.memory_usage).unwrap();
+        dict.set_item("min_value_set", stats.min_value_set).unwrap();
+        dict.set_item("max_value_set", stats.max_value_set).unwrap();
+        
+        dict.into()
+    }
+
+    /// Convenience methods for common quantiles
+    pub fn median(&mut self) -> Option<f64> {
+        self.quantile(0.5)
+    }
+
+    pub fn q95(&mut self) -> Option<f64> {
+        self.quantile(0.95)
+    }
+
+    pub fn q99(&mut self) -> Option<f64> {
+        self.quantile(0.99)
+    }
+
+    pub fn q25(&mut self) -> Option<f64> {
+        self.quantile(0.25)
+    }
+
+    pub fn q75(&mut self) -> Option<f64> {
+        self.quantile(0.75)
+    }
+}
+
 /// Python module definition
 #[cfg(feature = "extension-module")]
 #[pymodule]
@@ -501,6 +608,7 @@ fn sketches(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HllSketch>()?;
     m.add_class::<HllPlusPlusSketch>()?;
     m.add_class::<HllPlusPlusSparseSketch>()?;
+    m.add_class::<KllSketch>()?;
     m.add_class::<ThetaSketch>()?;
     m.add_class::<PpSketch>()?;
 
