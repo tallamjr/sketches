@@ -35,6 +35,56 @@ cargo test
 cargo test -- --nocapture
 ```
 
+### Performance Testing
+
+#### Phase Comparison Benchmarks
+```bash
+# Phase 1: Memory optimization baseline
+cargo run --example phase1_benchmark --release --features optimized
+
+# Phase 2: Throughput optimization
+cargo run --example phase2_benchmark --release --features optimized
+
+# Phase 3: System-level optimization  
+cargo run --example phase3_benchmark --release --features optimized
+
+# Phase 3 with real TPC-H data (realistic business workloads)
+cargo run --example phase3_tpch_benchmark --release --features optimized
+```
+
+#### Comprehensive Performance Tests
+```bash
+# Compare HLL implementations and variants
+cargo run --example hll_comparison --release --features optimized
+
+# Real-world TPC-H benchmark performance
+cargo run --example tpch_benchmarks --release --features optimized
+
+# Basic usage patterns and performance
+cargo run --example basic_usage --release --features optimized
+```
+
+#### Python Performance Testing
+```bash
+# Install with development optimizations
+pip install -e .[dev]
+
+# Run Python tests with performance timing
+pytest tests/test_sketches.py -v --tb=short
+
+# Test memory efficiency and usage patterns
+pytest tests/test_memory.py -v
+
+# Compare against Polars DataFrame performance
+pytest tests/test_polars_vs_sketch.py -v
+
+# Run notebook examples with performance measurement
+pytest --nbmake examples/getting_started.ipynb
+```
+
+#### Performance Testing
+Run benchmarks with `--release --features optimized` flags for optimal performance testing.
+
 ### Formatting
 ```bash
 # Format Rust code

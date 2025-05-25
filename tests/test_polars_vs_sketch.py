@@ -8,13 +8,13 @@ pl = pytest.importorskip("polars")
 
 
 @pytest.mark.parametrize(
-    "sketch_cls,true_rel_err", [
-        (sketches.ThetaSketch, 1e-6),
-        (sketches.HllSketch, 0.05),
-        (sketches.CpcSketch, 0.05),
+    "sketch_cls,sketch_param,true_rel_err", [
+        (sketches.ThetaSketch, 4096, 1e-6),
+        (sketches.HllSketch, 12, 0.05),
+        (sketches.CpcSketch, 11, 0.05),
     ],
 )
-def test_synthetic_cardinality_vs_polars(sketch_cls, true_rel_err):
+def test_synthetic_cardinality_vs_polars(sketch_cls, sketch_param, true_rel_err):
     """
     Compare sketch estimates to Polars exact distinct count on synthetic data.
     """
@@ -28,8 +28,8 @@ def test_synthetic_cardinality_vs_polars(sketch_cls, true_rel_err):
     exact = df["v"].n_unique()
     logging.info("Exact count via Polars: %d", exact)
 
-    # Sketch estimate
-    sk = sketch_cls()
+    # Sketch estimate with proper parameters
+    sk = sketch_cls(sketch_param)
     for v in values:
         sk.update(v)
     est = sk.estimate()
