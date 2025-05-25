@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 pub mod bloom;
+pub mod countmin;
 pub mod cpc;
 pub mod hll;
 pub mod pp;
@@ -362,6 +363,131 @@ impl CountingBloomFilter {
     }
 }
 
+/// Python binding for Count-Min Sketch.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "CountMinSketch")]
+pub struct CountMinSketch {
+    inner: countmin::CountMinSketch,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl CountMinSketch {
+    /// Create a new Count-Min sketch with specified dimensions.
+    #[new]
+    fn new(width: usize, depth: usize, use_simd: Option<bool>, conservative_update: Option<bool>) -> Self {
+        CountMinSketch {
+            inner: countmin::CountMinSketch::new(
+                width,
+                depth,
+                use_simd.unwrap_or(false),
+                conservative_update.unwrap_or(false)
+            ),
+        }
+    }
+
+    /// Create a Count-Min sketch with error bounds.
+    #[staticmethod]
+    fn with_error_bounds(epsilon: f64, delta: f64, use_simd: Option<bool>, conservative_update: Option<bool>) -> Self {
+        CountMinSketch {
+            inner: countmin::CountMinSketch::with_error_bounds(
+                epsilon,
+                delta,
+                use_simd.unwrap_or(false),
+                conservative_update.unwrap_or(false)
+            ),
+        }
+    }
+
+    /// Update the count for an item.
+    pub fn update(&mut self, item: &str, count: u64) -> PyResult<()> {
+        self.inner.update(&item, count);
+        Ok(())
+    }
+
+    /// Increment the count for an item by 1.
+    pub fn increment(&mut self, item: &str) -> PyResult<()> {
+        self.inner.increment(&item);
+        Ok(())
+    }
+
+    /// Estimate the frequency of an item.
+    pub fn estimate(&self, item: &str) -> u64 {
+        self.inner.estimate(&item)
+    }
+
+    /// Merge another Count-Min sketch into this one.
+    pub fn merge(&mut self, other: &CountMinSketch) -> PyResult<()> {
+        self.inner.merge(&other.inner)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    }
+
+    /// Get the total count of all items.
+    pub fn total_count(&self) -> u64 {
+        self.inner.total_count()
+    }
+
+    /// Find heavy hitters above threshold.
+    pub fn heavy_hitters(&self, threshold: u64) -> Vec<u64> {
+        self.inner.heavy_hitters(threshold)
+    }
+
+    /// Clear the sketch.
+    pub fn clear(&mut self) -> PyResult<()> {
+        self.inner.clear();
+        Ok(())
+    }
+
+    /// Get sketch statistics as a dictionary.
+    pub fn statistics(&self, py: Python) -> PyObject {
+        let stats = self.inner.statistics();
+        let dict = py.import("builtins").unwrap().getattr("dict").unwrap().call0().unwrap();
+        
+        dict.set_item("width", stats.width).unwrap();
+        dict.set_item("depth", stats.depth).unwrap();
+        dict.set_item("total_cells", stats.total_cells).unwrap();
+        dict.set_item("non_zero_cells", stats.non_zero_cells).unwrap();
+        dict.set_item("fill_ratio", stats.fill_ratio).unwrap();
+        dict.set_item("total_count", stats.total_count).unwrap();
+        dict.set_item("max_count", stats.max_count).unwrap();
+        dict.set_item("min_count", stats.min_count).unwrap();
+        dict.set_item("uses_simd", stats.uses_simd).unwrap();
+        dict.set_item("conservative_update", stats.conservative_update).unwrap();
+        
+        dict.into()
+    }
+}
+
+/// Python binding for Count Sketch.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "CountSketch")]
+pub struct CountSketch {
+    inner: countmin::CountSketch,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl CountSketch {
+    /// Create a new Count sketch.
+    #[new]
+    fn new(width: usize, depth: usize) -> Self {
+        CountSketch {
+            inner: countmin::CountSketch::new(width, depth),
+        }
+    }
+
+    /// Update the count for an item.
+    pub fn update(&mut self, item: &str, count: i64) -> PyResult<()> {
+        self.inner.update(&item, count);
+        Ok(())
+    }
+
+    /// Estimate the frequency of an item.
+    pub fn estimate(&self, item: &str) -> i64 {
+        self.inner.estimate(&item)
+    }
+}
+
 /// Python module definition
 #[cfg(feature = "extension-module")]
 #[pymodule]
@@ -369,6 +495,8 @@ fn sketches(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Add classes to module
     m.add_class::<BloomFilter>()?;
     m.add_class::<CountingBloomFilter>()?;
+    m.add_class::<CountMinSketch>()?;
+    m.add_class::<CountSketch>()?;
     m.add_class::<CpcSketch>()?;
     m.add_class::<HllSketch>()?;
     m.add_class::<HllPlusPlusSketch>()?;
