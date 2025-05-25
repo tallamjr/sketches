@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use tpchgen::{Customer, LineItem, Nation, Order, Part, PartSupp, Region, Supplier};
+use tpchgen::generators::{Customer, LineItem, Nation, Order, Part, PartSupp, Region, Supplier};
 
 fn main() {
     let scale_factor = std::env::args()

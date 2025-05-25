@@ -1,4 +1,6 @@
-use sketches::{HllSketch, ThetaSketch, CpcSketch};
+use sketches::hll::HllSketch;
+use sketches::theta::ThetaSketch;
+use sketches::cpc::CpcSketch;
 
 fn main() {
     println!("=== Sketches Basic Usage Example ===\n");

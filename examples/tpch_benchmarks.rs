@@ -1,6 +1,8 @@
-use sketches::{HllSketch, ThetaSketch, CpcSketch};
+use sketches::hll::HllSketch;
+use sketches::theta::ThetaSketch;
+use sketches::cpc::CpcSketch;
 use std::time::Instant;
-use tpchgen::{Customer, LineItem, Nation, Order, Part, PartSupp, Region, Supplier};
+use tpchgen::generators::{Customer, LineItem, Nation, Order, Part, PartSupp, Region, Supplier};
 
 fn main() {
     println!("=== TPC-H Benchmarks with Sketches ===\n");

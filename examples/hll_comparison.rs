@@ -1,4 +1,4 @@
-use sketches::{HllSketch, HllPlusPlusSketch, HllPlusPlusSparseSketch};
+use sketches::hll::{HllSketch, HllPlusPlusSketch, HllPlusPlusSparseSketch};
 use std::time::Instant;
 
 fn benchmark_sketch<F>(name: &str, mut update_fn: F, n: usize) -> (f64, u128)
@@ -26,7 +26,7 @@ fn main() {
     
     for &n in &sizes {
         println!("\nTesting with {} unique elements:", n);
-        println!("-".repeat(50));
+        println!("{}", "-".repeat(50));
         
         // Standard HLL
         let mut hll = HllSketch::new(14);
