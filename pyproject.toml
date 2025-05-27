@@ -48,6 +48,7 @@ dev = [
   "matplotlib",
   "polars",
   "psutil",
+  "seaborn",
   "twine",
 ]
 
