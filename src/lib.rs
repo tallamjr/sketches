@@ -292,8 +292,6 @@ impl ThetaSketch {
     }
 }
 
-
-
 /// Python binding for Bloom Filter.
 #[cfg(feature = "extension-module")]
 #[pyclass(name = "BloomFilter")]

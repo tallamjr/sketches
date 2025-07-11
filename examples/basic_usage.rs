@@ -20,7 +20,7 @@ fn main() {
 
     // Theta Sketch example
     println!("2. Theta Sketch - Set Operations");
-    let mut theta1 = ThetaSketch::new(4096);  // k parameter instead of precision
+    let mut theta1 = ThetaSketch::new(4096); // k parameter instead of precision
     let mut theta2 = ThetaSketch::new(4096);
 
     // Add elements to first sketch
@@ -44,7 +44,7 @@ fn main() {
 
     // CPC Sketch example (when properly implemented)
     println!("\n3. CPC Sketch - Compressed Counting");
-    let mut cpc = CpcSketch::new(11);  // lg_k parameter
+    let mut cpc = CpcSketch::new(11); // lg_k parameter
 
     for i in 0..1000 {
         cpc.update(&format!("item_{}", i));

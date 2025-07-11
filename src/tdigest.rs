@@ -3,6 +3,13 @@
 //! This module provides T-digest data structures for approximate quantile estimation
 //! in streaming data. T-digest is superior to q-digest for quantile queries and
 //! provides better accuracy with adaptive compression.
+//!
+//! **IMPORTANT LIMITATION**: The merge operation in this implementation uses a
+//! sampling approximation approach rather than proper T-Digest centroid merging.
+//! This may introduce additional approximation errors and degrade accuracy compared
+//! to proper centroid-based merging. For production distributed computing scenarios
+//! requiring high accuracy, consider alternatives or accumulate raw data points
+//! when possible.
 
 use std::fmt;
 use tdigest::TDigest as CoreTDigest;
@@ -12,6 +19,9 @@ use tdigest::TDigest as CoreTDigest;
 /// The T-Digest is a probabilistic data structure for estimating quantiles
 /// from a stream of data points. It provides excellent accuracy for extreme
 /// quantiles (like p95, p99) while maintaining compact memory usage.
+///
+/// **Note**: The merge operation uses sampling approximation rather than proper
+/// centroid merging, which may introduce additional approximation errors.
 #[derive(Debug, Clone)]
 pub struct TDigest {
     /// The underlying t-digest implementation
@@ -201,21 +211,39 @@ impl TDigest {
         (low + high) / 2.0
     }
 
-    /// Merge another T-Digest into this one
+    /// Merge another T-Digest into this one using sampling approximation
     ///
-    /// This operation combines two digests while maintaining the quantile
-    /// estimation properties. Useful for distributed computing scenarios.
+    /// **IMPORTANT LIMITATION**: This implementation uses a sampling approximation
+    /// approach rather than proper T-Digest centroid merging. This means:
+    ///
+    /// - The merge operation may introduce additional approximation errors
+    /// - Accuracy degrades compared to a proper centroid-based merge
+    /// - Multiple successive merges may compound these errors
+    /// - The merged result may not preserve the theoretical guarantees of T-Digest
+    ///
+    /// **Why this approach is used**: The underlying tdigest crate doesn't expose
+    /// internal centroids, preventing a proper implementation of centroid merging.
+    /// This sampling approach is a workaround to provide merge functionality.
+    ///
+    /// **Recommendation**: For production distributed computing scenarios requiring
+    /// high accuracy, consider using a T-Digest library that supports proper
+    /// centroid-based merging, or accumulate raw data points and create a single
+    /// digest from the combined dataset when possible.
     pub fn merge(&mut self, other: &TDigest) {
         if other.count == 0 {
             return;
         }
 
-        // For merging, we create a new digest with combined data
-        // The tdigest crate doesn't expose internal centroids, so we approximate
-        // by creating sample points from quantiles and merging them
+        // APPROXIMATION APPROACH: Since the tdigest crate doesn't expose internal
+        // centroids, we approximate the merge by sampling quantiles from both digests
+        // and creating a new digest from these sample points.
+        //
+        // This is NOT equivalent to proper T-Digest centroid merging and will
+        // introduce additional approximation errors.
         let mut sample_points = Vec::new();
 
-        // Sample from the current digest
+        // Sample 100 quantiles from the current digest
+        // Note: This loses information about the actual centroid weights and positions
         for i in 1..=100 {
             let q = i as f64 / 100.0;
             if let Some(value) = self.quantile(q) {
@@ -223,7 +251,8 @@ impl TDigest {
             }
         }
 
-        // Sample from the other digest
+        // Sample 100 quantiles from the other digest
+        // Note: This loses information about the actual centroid weights and positions
         for i in 1..=100 {
             let q = i as f64 / 100.0;
             if let Some(value) = other.quantile(q) {
@@ -231,7 +260,8 @@ impl TDigest {
             }
         }
 
-        // Create a new digest with all sample points
+        // Create a new digest from the sampled points
+        // This discards the original centroid structure and creates a new approximation
         if !sample_points.is_empty() {
             sample_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
             self.inner = CoreTDigest::new_with_size(self.compression);
@@ -240,7 +270,7 @@ impl TDigest {
 
         self.count += other.count;
 
-        // Update min/max
+        // Update min/max values (this part is accurate)
         if let Some(other_min) = other.min_value {
             self.min_value = Some(match self.min_value {
                 None => other_min,
@@ -546,6 +576,7 @@ mod tests {
         }
 
         // Merge digest2 into digest1
+        // Note: This uses sampling approximation, not proper centroid merging
         digest1.merge(&digest2);
 
         assert_eq!(digest1.count(), 100);
@@ -553,6 +584,7 @@ mod tests {
         assert_eq!(digest1.max(), Some(100.0));
 
         // Median should be around 50.5
+        // Using a larger tolerance due to approximation errors from sampling-based merge
         let median = digest1.median().unwrap();
         assert!((median - 50.5).abs() < 5.0);
     }

@@ -145,16 +145,16 @@ impl CountMinSketch {
                 // Process 4 rows at a time
                 let chunks = hashes.chunks_exact(4);
                 let remainder = chunks.remainder();
-                
+
                 for (chunk_idx, chunk) in chunks.enumerate() {
                     let base_row = chunk_idx * 4;
-                    
+
                     // Load 4 values in sequence and compare with minimum
                     let val0 = self.table[base_row][chunk[0]];
                     let val1 = self.table[base_row + 1][chunk[1]];
                     let val2 = self.table[base_row + 2][chunk[2]];
                     let val3 = self.table[base_row + 3][chunk[3]];
-                    
+
                     // Update only if equal to minimum (regular scalar comparisons)
                     if val0 == current_min {
                         self.table[base_row][chunk[0]] = val0.saturating_add(count);
@@ -169,7 +169,7 @@ impl CountMinSketch {
                         self.table[base_row + 3][chunk[3]] = val3.saturating_add(count);
                     }
                 }
-                
+
                 // Handle remaining rows
                 for (i, &col) in remainder.iter().enumerate() {
                     let row = hashes.len() - remainder.len() + i;
@@ -181,17 +181,21 @@ impl CountMinSketch {
                 // Standard update with chunked processing
                 let chunks = hashes.chunks_exact(4);
                 let remainder = chunks.remainder();
-                
+
                 for (chunk_idx, chunk) in chunks.enumerate() {
                     let base_row = chunk_idx * 4;
-                    
+
                     // Sequential saturating addition for 4 positions
-                    self.table[base_row][chunk[0]] = self.table[base_row][chunk[0]].saturating_add(count);
-                    self.table[base_row + 1][chunk[1]] = self.table[base_row + 1][chunk[1]].saturating_add(count);
-                    self.table[base_row + 2][chunk[2]] = self.table[base_row + 2][chunk[2]].saturating_add(count);
-                    self.table[base_row + 3][chunk[3]] = self.table[base_row + 3][chunk[3]].saturating_add(count);
+                    self.table[base_row][chunk[0]] =
+                        self.table[base_row][chunk[0]].saturating_add(count);
+                    self.table[base_row + 1][chunk[1]] =
+                        self.table[base_row + 1][chunk[1]].saturating_add(count);
+                    self.table[base_row + 2][chunk[2]] =
+                        self.table[base_row + 2][chunk[2]].saturating_add(count);
+                    self.table[base_row + 3][chunk[3]] =
+                        self.table[base_row + 3][chunk[3]].saturating_add(count);
                 }
-                
+
                 // Handle remaining rows
                 for (i, &col) in remainder.iter().enumerate() {
                     let row = hashes.len() - remainder.len() + i;
@@ -208,38 +212,37 @@ impl CountMinSketch {
     fn estimate_chunked(&self, hashes: &[usize]) -> u64 {
         if hashes.len() >= 4 {
             let mut min_count = u64::MAX;
-            
+
             // Process 4 rows at a time in batches
             let chunks = hashes.chunks_exact(4);
             let remainder = chunks.remainder();
-            
+
             for (chunk_idx, chunk) in chunks.enumerate() {
                 let base_row = chunk_idx * 4;
-                
+
                 // Load 4 values sequentially
                 let val0 = self.table[base_row][chunk[0]];
                 let val1 = self.table[base_row + 1][chunk[1]];
                 let val2 = self.table[base_row + 2][chunk[2]];
                 let val3 = self.table[base_row + 3][chunk[3]];
-                
+
                 // Find minimum of 4 values using regular scalar operations
                 let chunk_min = val0.min(val1).min(val2).min(val3);
                 min_count = min_count.min(chunk_min);
             }
-            
+
             // Handle remaining rows
             for (i, &col) in remainder.iter().enumerate() {
                 let row = hashes.len() - remainder.len() + i;
                 min_count = min_count.min(self.table[row][col]);
             }
-            
+
             min_count
         } else {
             // Fall back to scalar for small hash sets
             self.estimate_scalar(hashes)
         }
     }
-
 
     /// Merge another Count-Min sketch into this one
     pub fn merge(&mut self, other: &CountMinSketch) -> Result<(), &'static str> {

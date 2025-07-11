@@ -142,36 +142,36 @@ impl ThetaSketch {
     pub fn intersect(&self, other: &ThetaSketch) -> ThetaSketch {
         // Use the more conservative capacity (smaller k)
         let result_k = self.k.min(other.k);
-        
+
         // Use minimum theta from both sketches
         let result_theta = self.theta.min(other.theta);
-        
+
         // Find intersection of hash values that are less than result_theta
         let mut intersection_values = Vec::new();
-        
+
         for &value in &self.heap {
             if value < result_theta && other.heap.iter().any(|&other_val| other_val == value) {
                 intersection_values.push(value);
             }
         }
-        
+
         // Sort and take up to k values
         intersection_values.sort_unstable();
         intersection_values.truncate(result_k);
-        
+
         // Create result sketch
         let mut result_heap = BinaryHeap::new();
         for value in intersection_values {
             result_heap.push(value);
         }
-        
+
         // Adjust theta if we have exactly k elements
         let final_theta = if result_heap.len() == result_k {
             result_heap.peek().copied().unwrap_or(result_theta)
         } else {
             result_theta
         };
-        
+
         ThetaSketch {
             k: result_k,
             heap: result_heap,
@@ -192,27 +192,27 @@ impl ThetaSketch {
         // 8 bytes: theta (u64)
         // 8 bytes: heap length (usize)
         // N * 8 bytes: heap values (u64 each)
-        
+
         let mut bytes = Vec::new();
-        
+
         // Serialize k
         bytes.extend_from_slice(&self.k.to_le_bytes());
-        
+
         // Serialize theta
         bytes.extend_from_slice(&self.theta.to_le_bytes());
-        
+
         // Convert heap to sorted vector for consistent serialization
         let mut heap_values: Vec<u64> = self.heap.iter().copied().collect();
         heap_values.sort_unstable();
-        
+
         // Serialize heap length
         bytes.extend_from_slice(&heap_values.len().to_le_bytes());
-        
+
         // Serialize heap values
         for value in heap_values {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        
+
         bytes
     }
 
@@ -221,42 +221,50 @@ impl ThetaSketch {
         if bytes.len() < 24 {
             return Err("Insufficient bytes for theta sketch header");
         }
-        
+
         let mut offset = 0;
-        
+
         // Deserialize k
         let k = usize::from_le_bytes(
-            bytes[offset..offset + 8].try_into().map_err(|_| "Invalid k bytes")?
+            bytes[offset..offset + 8]
+                .try_into()
+                .map_err(|_| "Invalid k bytes")?,
         );
         offset += 8;
-        
+
         // Deserialize theta
         let theta = u64::from_le_bytes(
-            bytes[offset..offset + 8].try_into().map_err(|_| "Invalid theta bytes")?
+            bytes[offset..offset + 8]
+                .try_into()
+                .map_err(|_| "Invalid theta bytes")?,
         );
         offset += 8;
-        
+
         // Deserialize heap length
         let heap_len = usize::from_le_bytes(
-            bytes[offset..offset + 8].try_into().map_err(|_| "Invalid heap length bytes")?
+            bytes[offset..offset + 8]
+                .try_into()
+                .map_err(|_| "Invalid heap length bytes")?,
         );
         offset += 8;
-        
+
         // Check remaining bytes for heap values
         if bytes.len() < offset + heap_len * 8 {
             return Err("Insufficient bytes for heap values");
         }
-        
+
         // Deserialize heap values
         let mut heap = BinaryHeap::new();
         for _i in 0..heap_len {
             let value = u64::from_le_bytes(
-                bytes[offset..offset + 8].try_into().map_err(|_| "Invalid heap value bytes")?
+                bytes[offset..offset + 8]
+                    .try_into()
+                    .map_err(|_| "Invalid heap value bytes")?,
             );
             heap.push(value);
             offset += 8;
         }
-        
+
         Ok(ThetaSketch { k, heap, theta })
     }
 }

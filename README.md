@@ -30,7 +30,7 @@ Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservo
 |                            | Weighted Sampling  | Probability-proportional reservoir sampling                   | ✅         |
 |                            | Stream Sampling    | High-throughput sampling with batching                        | ✅         |
 | **Quantile Estimation**    | T-Digest           | Superior accuracy for extreme quantiles (p95, p99)            | ✅         |
-|                            | KLL Sketch         | Provable error bounds with exact merging                      | ✅         |
+|                            | KLL Sketch         | Simplified implementation (~20-30% error bounds)              | ✅         |
 | **Frequency Estimation**   | Count-Min Sketch   | Conservative frequency estimation with ε-δ guarantees         | ✅         |
 |                            | Count Sketch       | Unbiased frequency estimation using median                    | ✅         |
 |                            | Frequent Items     | Top-K heavy hitters with Space-Saving algorithm               | ✅         |
@@ -587,8 +587,8 @@ for item, estimate, lower, upper in top_items:
 ```python
 from sketches import KllSketch, TDigest
 
-# KLL Sketch for quantiles with provable error bounds
-kll = KllSketch.with_accuracy(epsilon=0.01, confidence=0.99)
+# KLL Sketch for quantiles (simplified implementation with ~20-30% error bounds)
+kll = KllSketch.with_accuracy(epsilon=0.25, confidence=0.8)
 for value in data_stream:
     kll.update(value)
 

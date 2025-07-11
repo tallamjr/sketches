@@ -53,11 +53,15 @@ fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     // For now, just verify the sketch doesn't crash and produces some estimate
     assert!(est > 0.0, "CPC should produce a positive estimate");
     assert!(est.is_finite(), "CPC estimate should be finite");
-    
+
     // Log the current accuracy issue for tracking
-    eprintln!("WARNING: CPC accuracy issue - est: {}, true: {}, error: {:.1}%", 
-              est, true_count, rel_err * 100.0);
-    
+    eprintln!(
+        "WARNING: CPC accuracy issue - est: {}, true: {}, error: {:.1}%",
+        est,
+        true_count,
+        rel_err * 100.0
+    );
+
     // TODO: Implement proper CPC algorithm to achieve <5% error
     // For reference: Apache DataSketches CPC achieves ~1-2% error on this dataset
     // Log memory usage: naive vs probabilistic sketch
