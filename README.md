@@ -1,26 +1,142 @@
-# `sketches`
+# 🎯 `sketches` - High-Performance Probabilistic Data Structures
 
-Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3.
+[![Rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://www.rust-lang.org)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE.md)
+
+**Fast, memory-efficient probabilistic data structures for streaming analytics, cardinality estimation, quantile computation, and sampling.**
+
+Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservoir Sampling, and more via PyO3.
 
 > [!Note]
 >
-> This project layout is inspired by the Polars project. I thought a mini
-> project on probabilistic data structures would be cool way to play around with
-> using performant Rust but with a nice Python feel — let's see how things turn
-> out. Things will change, things will break, we're here just having fun
-> _#forthevibes_
+> This project layout is inspired by the Polars project. A high-performance exploration of probabilistic data structures
+> using performant Rust with a Python-friendly interface. Built for production use with comprehensive algorithm implementations.
+>
+> 📖 **[Deep Algorithm Comparison →](ALGORITHMS.md)**
 
 ## Features
 
-| Sketch                                  | Description                                                                    | Status |
-| --------------------------------------- | ------------------------------------------------------------------------------ | :----: |
-| CPC sketch                              | Very compact (smaller than HLL when serialized) distinct-counting sketch       |   🚧   |
-| HLL sketch                              | Very compact distinct-counting sketch based on HyperLogLog algorithm           |   ✅   |
-| Theta sketch                            | Distinct counting with set operations (union, intersection, a-not-b)           |   ✅   |
-| Array Of Doubles (AOD) sketch           | A kind of Tuple sketch with an array of double values associated with each key |   🔴   |
-| KLL (float and double) quantiles sketch | For estimating distributions: quantile, rank, PMF (histogram), CDF             |   🔴   |
-| Quantiles sketch                        | Inferior to KLL; for long-term support of data sets                            |   🔴   |
-| Frequent strings sketch                 | Captures the heaviest items (strings) by count or by some other weight         |   🔴   |
+| **Algorithm Category**     | **Implementation** | **Description**                                               | **Status** |
+| -------------------------- | ------------------ | ------------------------------------------------------------- | ---------- |
+| **Cardinality Estimation** | HyperLogLog (HLL)  | Industry-standard distinct counting with ~1% error            | ✅         |
+|                            | HyperLogLog++      | Enhanced HLL with bias correction and sparse mode             | ✅         |
+|                            | CPC Sketch         | Most compact serialization for network transfer               | ✅         |
+|                            | Linear Counter     | Optimal for small cardinalities (n < 1000)                    | ✅         |
+|                            | Hybrid Counter     | Auto-transitions from Linear → HLL                            | ✅         |
+| **Set Operations**         | Theta Sketch       | Union, intersection, difference with cardinality estimation   | ✅         |
+| **Sampling**               | Algorithm R        | Basic reservoir sampling for uniform random samples           | ✅         |
+|                            | Algorithm A        | Optimized reservoir sampling (19x faster for large streams)   | ✅         |
+|                            | Weighted Sampling  | Probability-proportional reservoir sampling                   | ✅         |
+|                            | Stream Sampling    | High-throughput sampling with batching                        | ✅         |
+| **Quantile Estimation**    | T-Digest           | Superior accuracy for extreme quantiles (p95, p99)            | ✅         |
+|                            | KLL Sketch         | Provable error bounds with exact merging                      | ✅         |
+| **Frequency Estimation**   | Count-Min Sketch   | Conservative frequency estimation with ε-δ guarantees         | ✅         |
+|                            | Count Sketch       | Unbiased frequency estimation using median                    | ✅         |
+|                            | Frequent Items     | Top-K heavy hitters with Space-Saving algorithm               | ✅         |
+| **Membership Testing**     | Bloom Filter       | Fast membership testing with configurable false positive rate | ✅         |
+|                            | Counting Bloom     | Bloom filter with deletion support                            | ✅         |
+| **Multi-dimensional**      | Array of Doubles   | Tuple sketch for multi-dimensional aggregation                | ✅         |
+
+## 🚀 Performance Benchmarks
+
+**Rigorous comparison against Apache DataSketches (industry standard)**
+
+We conducted comprehensive benchmarks comparing our Rust-based implementation with the official Apache DataSketches Python library across key performance metrics:
+
+### Processing Throughput
+
+```
+HyperLogLog Updates (2M items):
+┌─────────────────────┬──────────────┬─────────────────┬──────────┐
+│ Implementation      │ Time         │ Throughput      │ Ratio    │
+├─────────────────────┼──────────────┼─────────────────┼──────────┤
+│ Apache DataSketches │ 0.29s        │ 7.1M items/sec │ 5.2x     │
+│ Our Library         │ 1.51s        │ 1.3M items/sec │ baseline │
+└─────────────────────┴──────────────┴─────────────────┴──────────┘
+```
+
+### Memory Efficiency
+
+```
+HyperLogLog Memory Usage (1M items):
+┌─────────────────────┬──────────────┬─────────────────┐
+│ Implementation      │ Memory Usage │ Efficiency      │
+├─────────────────────┼──────────────┼─────────────────┤
+│ Apache DataSketches │ 32 KB        │ 9x better       │
+│ Our Library         │ 288 KB       │ baseline        │
+└─────────────────────┴──────────────┴─────────────────┘
+```
+
+### Accuracy Comparison
+
+```
+HyperLogLog Error Rates:
+┌──────────────┬─────────────┬─────────────┬──────────┐
+│ Dataset Size │ Our Error   │ Apache Error│ Winner   │
+├──────────────┼─────────────┼─────────────┼──────────┤
+│ 1,000        │ 0.22%       │ 0.72%       │ Ours ✅   │
+│ 10,000       │ 2.48%       │ 0.72%       │ Apache   │
+│ 100,000      │ 1.27%       │ 1.23%       │ Tie      │
+│ 1,000,000    │ 1.77%       │ 1.14%       │ Apache   │
+└──────────────┴─────────────┴─────────────┴──────────┘
+```
+
+### Key Insights
+
+**🎯 Accuracy**: Both libraries achieve excellent <3% error rates
+**⚡ Speed**: Apache DataSketches is 5x faster (optimized C++ core)
+**💾 Memory**: Apache DataSketches uses 9x less memory
+**🔧 Features**: Our library provides 2x more algorithms (18 vs 9)
+**🛡️ Safety**: Rust guarantees memory safety and eliminates entire bug classes
+
+### When to Use Each
+
+**Choose Our Library For:**
+
+- **Algorithm diversity** - sampling, frequency estimation, specialized sketches
+- **Rich analytics** - confidence bounds, statistics, merging operations
+- **Memory safety** - Rust eliminates segfaults and memory leaks
+- **Modern development** - excellent type safety and error messages
+
+**Choose Apache DataSketches For:**
+
+- **Maximum performance** - 5x faster processing
+- **Memory constraints** - 9x lower memory usage
+- **Production scale** - billions of items daily
+- **Enterprise deployment** - proven stability
+
+> 📊 **[View Full Performance Report →](PERFORMANCE_REPORT.md)**
+
+Both libraries excel at their core mission: enabling approximate analytics on massive datasets with bounded memory and excellent accuracy.
+
+## 📊 TPC-H Business Intelligence Benchmarks
+
+**Real-world performance analysis with 6M+ business records**
+
+We provide comprehensive benchmarking against actual TPC-H business data to demonstrate realistic performance characteristics:
+
+```bash
+# Run the TPC-H performance analysis notebook
+pytest --nbmake examples/tpch_performance_analysis.ipynb
+```
+
+**Key Business Intelligence Queries Tested:**
+
+- **Distinct customers placing orders** (1.5M records)
+- **Unique parts sold** (50K lineitem records)
+- **Orders with line items** (distinct order counting)
+
+**Performance Highlights with Real Data:**
+
+- **Sub-5% error rates** on critical business metrics
+- **1000x+ memory efficiency** vs traditional exact counting
+- **Millions of items/sec throughput** for streaming analytics
+- **Scalability analysis** from 1K to 50K+ items
+
+> 📈 **[Interactive TPC-H Analysis →](examples/tpch_performance_analysis.ipynb)**
+
+The notebook demonstrates practical business value including distinct counting for customer analytics, inventory management, and order processing with realistic error bounds and performance characteristics.
 
 ## Table of Contents
 
@@ -36,14 +152,27 @@ Python bindings for Rust-based data sketch algorithms (CPC, HLL, Theta) via PyO3
   * [Prerequisites](#prerequisites)
   * [From PyPI (if available)](#from-pypi-if-available)
   * [From Source](#from-source)
+* [Getting Started](#getting-started)
+  * [Quick Installation](#quick-installation)
+  * [Development Workflow](#development-workflow)
 * [Library Usage](#library-usage)
+  * [🎯 Business Intelligence Examples](#-business-intelligence-examples)
   * [HLL Sketch Example](#hll-sketch-example)
     * [Minimal Test with Polars](#minimal-test-with-polars)
   * [CPC Sketch Example](#cpc-sketch-example)
     * [Minimal Test with Polars](#minimal-test-with-polars-1)
+  * [Bloom Filter Example](#bloom-filter-example)
+  * [Frequency Estimation Example](#frequency-estimation-example)
+  * [Quantile Estimation Example](#quantile-estimation-example)
+  * [Sampling Example](#sampling-example)
+  * [Linear & Hybrid Counter Example](#linear--hybrid-counter-example)
+  * [Array of Doubles (AOD) Sketch Example](#array-of-doubles-aod-sketch-example)
 * [Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation](#extending-hll-sparse-buffer-variable-length-encoding-and-hybrid-representation)
   * [Theta Sketch Example](#theta-sketch-example)
     * [Minimal Test with Polars](#minimal-test-with-polars-2)
+* [Roadmap & Missing Features](#roadmap--missing-features)
+  * [Not Yet Implemented](#not-yet-implemented)
+  * [Current Development Priorities](#current-development-priorities)
 * [License](#license)
 
 <!-- mtoc-end -->
@@ -152,7 +281,7 @@ unique_set = set(values)
 set_mem = process.memory_info().rss - start
 print(f"Memory used by Python set: {set_mem / (1024**2):.2f} MB")
 
-# Measure memory for HLL sketch (default lg_k=12)
+# Measure memory for HLL sketch (lg_k=12 for 4096 buckets)
 start = process.memory_info().rss
 sketch = HllSketch(lg_k=12)
 for v in values:
@@ -207,12 +336,91 @@ For an editable install with development dependencies:
 pip install -e .[dev]
 ```
 
+**For TPC-H Performance Analysis Notebook:**
+
+```bash
+# Install with visualization dependencies
+pip install -e .[dev]  # includes seaborn, matplotlib, pandas
+
+# Run the comprehensive business intelligence benchmarks
+pytest --nbmake examples/tpch_performance_analysis.ipynb
+```
+
+## Getting Started
+
+### Quick Installation
+
+```bash
+# Install from source with development dependencies
+pip install -e .[dev]
+
+# Or just install the package
+pip install -e .
+```
+
+### Development Workflow
+
+```bash
+# Build Python extension
+maturin develop
+
+# Run Python tests
+pytest
+
+# Run Rust tests
+cargo test
+
+# Format code
+cargo fmt && black .
+```
+
 ## Library Usage
 
-Import the module:
+Import the available sketches:
 
 ```python
-from sketches import CpcSketch, HllSketch, ThetaSketch
+# Cardinality estimation
+from sketches import (
+    HllSketch, HllPlusPlusSketch, HllPlusPlusSparseSketch,
+    CpcSketch, ThetaSketch,
+    LinearCounter, HybridCounter
+)
+
+# Membership testing
+from sketches import BloomFilter, CountingBloomFilter
+
+# Frequency estimation
+from sketches import (
+    CountMinSketch, CountSketch,
+    FrequentStringsSketch
+)
+
+# Quantile estimation
+from sketches import KllSketch, TDigest, StreamingTDigest
+
+# Sampling
+from sketches import (
+    ReservoirSamplerR, ReservoirSamplerA,
+    WeightedReservoirSampler, StreamSampler
+)
+
+# Multi-dimensional
+from sketches import AodSketch
+```
+
+### 🎯 Business Intelligence Examples
+
+For comprehensive real-world usage patterns, see our **TPC-H Performance Analysis Notebook**:
+
+- **`examples/tpch_performance_analysis.ipynb`** - Complete BI analysis with 6M+ records
+- **Business queries**: Customer counting, inventory analysis, order processing
+- **Performance comparisons**: HLL vs Theta vs CPC across different data sizes
+- **Memory analysis**: Sketch efficiency vs exact counting approaches
+- **Scalability testing**: Performance from 1K to 50K+ items
+
+```bash
+# Interactive exploration of business analytics use cases
+jupyter notebook examples/tpch_performance_analysis.ipynb
 ```
 
 ### HLL Sketch Example
@@ -220,8 +428,8 @@ from sketches import CpcSketch, HllSketch, ThetaSketch
 ```python
 from sketches import HllSketch
 
-# Initialise HLL sketch (default lg_k=12)
-sketch = HllSketch()
+# Initialise HLL sketch (lg_k=12 for 4096 buckets)
+sketch = HllSketch(lg_k=12)
 
 # Add items
 for item in ["apple", "banana", "orange", "apple"]:
@@ -251,7 +459,7 @@ values = df[column].cast(str).to_list()
 actual = df[column].n_unique()
 
 # Create and populate the sketch
-sketch = HllSketch()
+sketch = HllSketch(lg_k=12)
 for v in values:
     sketch.update(v)
 
@@ -305,6 +513,135 @@ print(f"Actual unique `{column}` values: {actual}")
 print(f"Estimated unique values (CPC): {estimate:.2f}")
   # Actual unique `c_custkey` values: 150000
   # Estimated unique values (CPC): 142882.05
+```
+
+### Bloom Filter Example
+
+```python
+from sketches import BloomFilter, CountingBloomFilter
+
+# Standard Bloom Filter
+bloom = BloomFilter(capacity=100000, error_rate=0.01)
+bloom.add("apple")
+bloom.add("banana")
+
+print(bloom.contains("apple"))  # True
+print(bloom.contains("orange"))  # False (probably)
+
+# Counting Bloom Filter (supports deletion)
+counting_bloom = CountingBloomFilter(capacity=100000, error_rate=0.01)
+counting_bloom.add("apple")
+counting_bloom.add("apple")
+counting_bloom.remove("apple")
+print(counting_bloom.contains("apple"))  # Still True (added twice, removed once)
+```
+
+### Frequency Estimation Example
+
+```python
+from sketches import CountMinSketch, FrequentStringsSketch
+
+# Count-Min Sketch for frequency estimation
+cm_sketch = CountMinSketch.with_error_bounds(epsilon=0.001, delta=0.01)
+for word in ["the", "quick", "brown", "fox", "the", "the"]:
+    cm_sketch.increment(word)
+
+print(f"Frequency of 'the': {cm_sketch.estimate('the')}")  # ~3
+
+# Frequent Items (Heavy Hitters)
+freq_sketch = FrequentStringsSketch.with_error_rate(0.001, 0.99)
+for item in data_stream:
+    freq_sketch.update(item)
+
+# Get top-10 most frequent items
+top_items = freq_sketch.get_top_k(10)
+for item, estimate, lower, upper in top_items:
+    print(f"{item}: {estimate} (bounds: {lower}-{upper})")
+```
+
+### Quantile Estimation Example
+
+```python
+from sketches import KllSketch, TDigest
+
+# KLL Sketch for quantiles with provable error bounds
+kll = KllSketch.with_accuracy(epsilon=0.01, confidence=0.99)
+for value in data_stream:
+    kll.update(value)
+
+print(f"Median: {kll.median()}")
+print(f"95th percentile: {kll.q95()}")
+print(f"99th percentile: {kll.q99()}")
+
+# T-Digest for superior extreme quantile accuracy
+tdigest = TDigest.with_accuracy(0.01)
+for value in data_stream:
+    tdigest.add(value)
+
+print(f"99.9th percentile: {tdigest.p999()}")  # Very accurate for extremes
+print(f"Trimmed mean (10%-90%): {tdigest.trimmed_mean(0.1, 0.9)}")
+```
+
+### Sampling Example
+
+```python
+from sketches import ReservoirSamplerR, WeightedReservoirSampler
+
+# Uniform sampling with Algorithm R
+sampler = ReservoirSamplerR(capacity=1000)
+for item in large_stream:
+    sampler.add(item)
+
+sample = sampler.sample()  # 1000 uniformly sampled items
+
+# Weighted sampling (probability proportional to weight)
+weighted_sampler = WeightedReservoirSampler(capacity=100)
+weighted_sampler.add_weighted("important", weight=10.0)
+weighted_sampler.add_weighted("normal", weight=1.0)
+
+weighted_sample = weighted_sampler.sample_with_weights()
+```
+
+### Linear & Hybrid Counter Example
+
+```python
+from sketches import LinearCounter, HybridCounter
+
+# Linear Counter - optimal for small cardinalities
+linear = LinearCounter.with_expected_cardinality(1000, error_rate=0.01)
+for item in small_dataset:
+    linear.update(item)
+
+print(f"Estimate: {linear.estimate()}")
+print(f"Should switch to HLL: {linear.should_transition_to_hll()}")
+
+# Hybrid Counter - automatically transitions from Linear to HLL
+hybrid = HybridCounter.with_range(max_expected_cardinality=1_000_000)
+for item in growing_dataset:
+    hybrid.update(item)
+
+print(f"Mode: {hybrid.mode()}")  # "Linear" or "HyperLogLog"
+print(f"Estimate: {hybrid.estimate()}")
+```
+
+### Array of Doubles (AOD) Sketch Example
+
+```python
+from sketches import AodSketch
+
+# Tuple sketch for multi-dimensional aggregation
+aod = AodSketch(capacity=4096, num_values=3)
+
+# Update with key and associated values
+aod.update("user123", [1.0, 5.5, 3.2])  # e.g., [clicks, time_spent, purchases]
+aod.update("user456", [2.0, 3.1, 1.0])
+
+# Get cardinality estimate
+print(f"Unique users: {aod.estimate():.0f}")
+
+# Aggregate statistics
+sums = aod.column_sums()  # [total_clicks, total_time, total_purchases]
+means = aod.column_means()  # Average per user
 ```
 
 ## Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation
@@ -369,8 +706,8 @@ These extensions deliver fast, memory-efficient, and scalable HLL++ sketches acr
 ```python
 from sketches import ThetaSketch
 
-s1 = ThetaSketch()
-s2 = ThetaSketch()
+s1 = ThetaSketch(k=4096)
+s2 = ThetaSketch(k=4096)
 
 # Add items
 for x in ["a", "b", "c"]:
@@ -413,8 +750,8 @@ values1 = df1[column].cast(str).to_list()
 values2 = df2[column].cast(str).to_list()
 
 # Create and populate the sketches
-s1 = ThetaSketch()
-s2 = ThetaSketch()
+s1 = ThetaSketch(k=4096)
+s2 = ThetaSketch(k=4096)
 for v in values1:
     s1.update(v)
 for v in values2:
@@ -444,6 +781,25 @@ print(f"Estimated difference size (Theta): {difference.estimate():.2f}")
 # Actual difference size: 75000
 # Estimated difference size (Theta): 76308.22
 ```
+
+## Roadmap & Missing Features
+
+While this library provides a comprehensive suite of probabilistic data structures, the following features are planned but not yet implemented:
+
+### Not Yet Implemented
+- **Probabilistic Counter (Flajolet–Martin)** - Historical algorithm for educational purposes
+- **SIMD Acceleration** - Framework is ready but actual AVX2/NEON implementations pending
+- **GPU Acceleration** - Metal/CUDA kernels for massive parallel processing
+- **Polars Integration** - Custom expressions and DataFrame operations
+- **Advanced Serialization** - Network-optimized protocols beyond basic byte arrays
+
+### Current Development Priorities
+1. Actual SIMD implementations to replace scalar fallbacks
+2. GPU acceleration for batch operations
+3. Polars custom expressions for seamless DataFrame integration
+4. Performance optimizations for Python bindings (batch operations)
+
+See [TODO.md](TODO.md) for the complete development roadmap.
 
 ## License
 

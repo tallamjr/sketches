@@ -1,6 +1,7 @@
 /target
 /tests/data
 **/par-*
+tests/data_scaled/*
 
 # General
 .DS_Store
