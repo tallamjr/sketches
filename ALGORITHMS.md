@@ -1,6 +1,6 @@
-# 🧮 Algorithm Deep Dive: Understanding Probabilistic Data Structures
+# Algorithm Deep Dive
 
-This document provides detailed explanations of all probabilistic data structure algorithms implemented in this library, following the same clear approach as the Algorithm R vs Algorithm A comparison.
+This document provides detailed explanations of all probabilistic data structure algorithms implemented in this library, with focus on their technical implementation and performance characteristics.
 
 ## 📊 **Cardinality Estimation Algorithms**
 
