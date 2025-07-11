@@ -65,8 +65,8 @@ fn main() {
     println!("\n2. Large Dataset Performance");
     println!("{}", "-".repeat(30));
 
-    let mut large_kll = KllSketch::with_accuracy(0.01, 0.99);
-    println!("Created KLL sketch with 1% accuracy, 99% confidence");
+    let mut large_kll = KllSketch::with_accuracy(0.25, 0.8);
+    println!("Created KLL sketch with 25% accuracy target, 80% confidence");
 
     // Simulate a large dataset
     let n_samples = 100000;

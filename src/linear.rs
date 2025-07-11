@@ -155,25 +155,25 @@ impl LinearCounter {
     /// Merge using chunked processing (NOT true SIMD - just batch optimization)
     fn merge_chunked(&mut self, other: &LinearCounter) {
         let len = self.bit_array.len();
-        
+
         // Process 4 u32 values at a time in batches
         let chunks = self.bit_array.chunks_exact_mut(4);
         let other_chunks = other.bit_array.chunks_exact(4);
-        
+
         for (self_chunk, other_chunk) in chunks.zip(other_chunks) {
             // Perform sequential bitwise OR operations
             self_chunk[0] |= other_chunk[0];
             self_chunk[1] |= other_chunk[1];
             self_chunk[2] |= other_chunk[2];
             self_chunk[3] |= other_chunk[3];
-            
+
             // Count bits sequentially using regular count_ones()
             self.bits_set += self_chunk[0].count_ones() as usize;
             self.bits_set += self_chunk[1].count_ones() as usize;
             self.bits_set += self_chunk[2].count_ones() as usize;
             self.bits_set += self_chunk[3].count_ones() as usize;
         }
-        
+
         // Handle remaining elements
         let remainder_start = (len / 4) * 4;
         for i in remainder_start..len {
@@ -181,7 +181,6 @@ impl LinearCounter {
             self.bits_set += self.bit_array[i].count_ones() as usize;
         }
     }
-
 
     /// Clear the counter
     pub fn clear(&mut self) {

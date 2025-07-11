@@ -3,9 +3,14 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// CPC (Compressed Probabilistic Counting) Sketch implementation
-/// 
-/// This implementation follows the CPC paper's approach with proper sparse mode,
-/// sampling-based transitions, and appropriate estimation formulas.
+///
+/// IMPORTANT LIMITATION: This implementation provides a CPC-like data structure
+/// with proper sparse mode and transitions, but uses simplified HLL-style estimation
+/// rather than the full CPC algorithm. The estimation method is NOT the complete
+/// CPC methodology described in the original paper.
+///
+/// This provides reasonable cardinality approximations but should not be considered
+/// a complete CPC implementation.
 pub struct CpcSketch {
     lg_k: u8,
     k: usize,
@@ -37,13 +42,13 @@ impl CpcSketch {
         let mut hasher = DefaultHasher::new();
         item.hash(&mut hasher);
         let hash = hasher.finish();
-        
+
         self.num_coupons += 1;
 
         if self.sparse_mode {
             // In sparse mode, store the raw hash values
             let _was_new = self.sparse_set.insert(hash);
-            
+
             // Check if we should transition from sparse to dense mode
             // CPC transitions when the sparse set size approaches k/4
             if self.sparse_set.len() >= self.k / 4 {
@@ -53,7 +58,7 @@ impl CpcSketch {
             // Dense mode - use bucket index and leading zeros
             let bucket = (hash & ((1 << self.lg_k) - 1)) as usize;
             let w = hash >> self.lg_k;
-            
+
             // Count leading zeros in w, adding 1 (standard CPC approach)
             // For CPC, we need to be more careful about the rho calculation
             let rho = if w == 0 {
@@ -62,7 +67,7 @@ impl CpcSketch {
             } else {
                 (w.leading_zeros() + 1).min(32) as u8
             };
-            
+
             // Update bucket with maximum rho value seen
             if rho > self.table[bucket] {
                 self.table[bucket] = rho;
@@ -78,7 +83,7 @@ impl CpcSketch {
         for &hash in &self.sparse_set {
             let bucket = (hash & ((1 << self.lg_k) - 1)) as usize;
             let w = hash >> self.lg_k;
-            
+
             let rho = if w == 0 {
                 (64 - self.lg_k).min(32) as u8 + 1
             } else {
@@ -93,25 +98,32 @@ impl CpcSketch {
         self.sparse_set.clear();
     }
 
-    /// Estimate cardinality using proper CPC algorithm
+    /// Estimate cardinality using HLL approximation (not full CPC algorithm)
+    ///
+    /// WARNING: This implementation uses simplified HLL-style estimation rather than
+    /// the full CPC algorithm. It provides reasonable approximations but does not
+    /// implement the complete CPC estimation methodology.
     pub fn estimate(&self) -> f64 {
         if self.sparse_mode {
             // In sparse mode, we have exact count
             self.sparse_set.len() as f64
         } else {
-            // Dense mode - use CPC estimation formula
-            self.estimate_dense_mode()
+            // Dense mode - use simplified HLL approximation
+            self.estimate_hll_approximation()
         }
     }
-    
-    /// CPC estimation in dense mode using simplified but mathematically sound approach
-    /// NOTE: This is a simplified implementation for basic functionality
-    fn estimate_dense_mode(&self) -> f64 {
+
+    /// HLL-style approximation for cardinality estimation
+    ///
+    /// IMPORTANT: This function does NOT implement the CPC algorithm. It uses a
+    /// simplified HLL-style harmonic mean approach for basic cardinality estimation.
+    /// This provides reasonable approximations but is not the full CPC methodology.
+    fn estimate_hll_approximation(&self) -> f64 {
         let k = self.k as f64;
-        
+
         // Count the number of empty buckets (zeros)
         let num_zeros = self.table.iter().filter(|&&x| x == 0).count() as f64;
-        
+
         // Use linear counting when we have many zeros (standard for small cardinalities)
         if num_zeros > 0.0 && num_zeros >= k * 0.1 {
             let linear_estimate = k * (k / num_zeros).ln();
@@ -119,34 +131,34 @@ impl CpcSketch {
                 return linear_estimate;
             }
         }
-        
-        // For larger cardinalities, use a basic HLL-style estimation
-        // This is NOT the full CPC algorithm but provides reasonable estimates
+
+        // For larger cardinalities, use HLL-style harmonic mean calculation
+        // WARNING: This is HLL algorithm, NOT CPC algorithm
         let mut harmonic_sum = 0.0;
         for &rho in &self.table {
             if rho > 0 {
-                // Use standard HLL approach: each rho contributes 2^(-rho)
+                // Standard HLL harmonic mean: each rho contributes 2^(-rho)
                 harmonic_sum += 2_f64.powi(-(rho as i32));
             } else {
                 harmonic_sum += 1.0;
             }
         }
-        
+
         if harmonic_sum > 0.0 {
-            // Basic HLL formula (simplified version of CPC)
+            // Standard HLL formula (NOT CPC algorithm)
             let alpha = 0.7213 / (1.0 + 1.079 / k);
             let raw_estimate = alpha * k * k / harmonic_sum;
-            
+
             // Apply reasonable bounds
             let min_bound = num_zeros.max(1.0);
             let max_bound = k * 1000.0; // Allow larger estimates than before
-            
+
             raw_estimate.max(min_bound).min(max_bound)
         } else {
             k // Fallback if harmonic sum is invalid
         }
     }
-    
+
     /// Get alpha constant for bias correction based on k
     fn get_alpha_constant(&self) -> f64 {
         match self.k {
@@ -156,11 +168,11 @@ impl CpcSketch {
             _ => 0.7213 / (1.0 + 1.079 / (self.k as f64)),
         }
     }
-    
+
     /// Apply bias correction based on estimate range
     fn apply_bias_correction(&self, raw_estimate: f64, num_zeros: f64) -> f64 {
         let k = self.k as f64;
-        
+
         // Small range correction (when estimate is small and we have zeros)
         if raw_estimate <= 2.5 * k && num_zeros > 0.0 {
             let linear_estimate = k * (k / num_zeros).ln();
@@ -171,7 +183,7 @@ impl CpcSketch {
             }
         }
         // Large range correction (prevent overflow in very large estimates)
-        else if raw_estimate > (1.0/30.0) * (1u64 << 32) as f64 {
+        else if raw_estimate > (1.0 / 30.0) * (1u64 << 32) as f64 {
             let two_32 = (1u64 << 32) as f64;
             let corrected = -two_32 * (1.0 - raw_estimate / two_32).ln();
             if corrected.is_finite() && corrected > 0.0 {
@@ -197,7 +209,7 @@ impl CpcSketch {
             self.lg_k, other.lg_k,
             "Cannot merge sketches with different lg_k"
         );
-        
+
         // Update coupon count (approximation for merged sketches)
         self.num_coupons += other.num_coupons;
 
@@ -301,11 +313,15 @@ mod tests {
 
         let estimate = sketch.estimate();
         let error = (estimate - 1000.0).abs() / 1000.0;
-        
-        // Our simplified CPC implementation should have reasonable accuracy
+
+        // Our HLL-style approximation should have reasonable accuracy
         // Standard HLL accuracy is ~1.04/sqrt(2^precision) ≈ 3.2% for precision=10
-        // Allow up to 10% error for our simplified implementation
-        assert!(error < 0.10, "CPC error {:.1}% exceeds 10% tolerance", error * 100.0);
+        // Allow up to 10% error for our simplified HLL approximation
+        assert!(
+            error < 0.10,
+            "HLL approximation error {:.1}% exceeds 10% tolerance",
+            error * 100.0
+        );
     }
 
     #[test]
@@ -325,9 +341,13 @@ mod tests {
 
         let estimate = sketch1.estimate();
         let error = (estimate - 1000.0).abs() / 1000.0;
-        
-        // Merged sketch should maintain reasonable accuracy
-        assert!(error < 0.10, "CPC merge error {:.1}% exceeds 10% tolerance", error * 100.0);
+
+        // Merged sketch should maintain reasonable accuracy with HLL approximation
+        assert!(
+            error < 0.10,
+            "HLL approximation merge error {:.1}% exceeds 10% tolerance",
+            error * 100.0
+        );
     }
 
     #[test]

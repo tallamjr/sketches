@@ -74,40 +74,46 @@ fn test_simd_acceleration(data: &[String]) {
     #[cfg(feature = "optimized")]
     {
         use sketches::simd_ops::utils;
-        
+
         // Check SIMD capabilities
         let simd_available = utils::simd_available();
         let simd_features = utils::simd_features();
-        
+
         println!("SIMD available: {}", simd_available);
         println!("SIMD features: {:?}", simd_features);
-        
+
         if simd_available {
             // Test SIMD-accelerated HLL operations
             let mut hll = HllSketch::new(12);
             let sample_data = &data[..100_000];
-            
+
             let start = Instant::now();
             hll.update_batch(sample_data);
             let duration = start.elapsed();
-            
+
             println!("SIMD HLL batch processing: {:.2}ms", duration.as_millis());
             println!("Items processed: {}", sample_data.len());
-            println!("Throughput: {:.0} items/sec", sample_data.len() as f64 / duration.as_secs_f64());
+            println!(
+                "Throughput: {:.0} items/sec",
+                sample_data.len() as f64 / duration.as_secs_f64()
+            );
             println!("Estimated cardinality: {:.0}", hll.estimate());
         } else {
             println!("SIMD optimizations not available on this platform");
-            
+
             // Still test regular batch operations
             let mut hll = HllSketch::new(12);
             let sample_data = &data[..100_000];
-            
+
             let start = Instant::now();
             hll.update_batch(sample_data);
             let duration = start.elapsed();
-            
+
             println!("Standard batch processing: {:.2}ms", duration.as_millis());
-            println!("Throughput: {:.0} items/sec", sample_data.len() as f64 / duration.as_secs_f64());
+            println!(
+                "Throughput: {:.0} items/sec",
+                sample_data.len() as f64 / duration.as_secs_f64()
+            );
         }
     }
 

@@ -58,8 +58,12 @@ fn load_tpch_data() -> TpchData {
     if let Ok(file) = File::open("tests/data/customer.csv") {
         let reader = BufReader::new(file);
         for (i, line) in reader.lines().enumerate() {
-            if i == 0 { continue; } // Skip header
-            if i > 50000 { break; } // Limit for performance
+            if i == 0 {
+                continue;
+            } // Skip header
+            if i > 50000 {
+                break;
+            } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
                     customer_ids.push(format!("CUST_{}", first_field));
@@ -72,8 +76,12 @@ fn load_tpch_data() -> TpchData {
     if let Ok(file) = File::open("tests/data/orders.csv") {
         let reader = BufReader::new(file);
         for (i, line) in reader.lines().enumerate() {
-            if i == 0 { continue; } // Skip header
-            if i > 100000 { break; } // Limit for performance
+            if i == 0 {
+                continue;
+            } // Skip header
+            if i > 100000 {
+                break;
+            } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
                     order_keys.push(format!("ORD_{}", first_field));
@@ -86,14 +94,20 @@ fn load_tpch_data() -> TpchData {
     if let Ok(file) = File::open("tests/data/lineitem.csv") {
         let reader = BufReader::new(file);
         for (i, line) in reader.lines().enumerate() {
-            if i == 0 { continue; } // Skip header
-            if i > 200000 { break; } // Limit for performance
+            if i == 0 {
+                continue;
+            } // Skip header
+            if i > 200000 {
+                break;
+            } // Limit for performance
             if let Ok(line) = line {
                 let fields: Vec<&str> = line.split(',').collect();
                 if fields.len() >= 4 {
                     // Combine order key, part key, supplier key, line number for unique ID
-                    lineitem_keys.push(format!("LI_{}_{}_{}_{}", 
-                        fields[0], fields[1], fields[2], fields[3]));
+                    lineitem_keys.push(format!(
+                        "LI_{}_{}_{}_{}",
+                        fields[0], fields[1], fields[2], fields[3]
+                    ));
                 }
             }
         }
@@ -103,8 +117,12 @@ fn load_tpch_data() -> TpchData {
     if let Ok(file) = File::open("tests/data/part.csv") {
         let reader = BufReader::new(file);
         for (i, line) in reader.lines().enumerate() {
-            if i == 0 { continue; } // Skip header
-            if i > 50000 { break; } // Limit for performance
+            if i == 0 {
+                continue;
+            } // Skip header
+            if i > 50000 {
+                break;
+            } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
                     part_keys.push(format!("PART_{}", first_field));
@@ -127,10 +145,12 @@ fn test_cache_optimization_tpch(data: &TpchData) {
     #[cfg(feature = "optimized")]
     {
         let mut cache_registers = CacheOptimizedPackedRegisters::new(12, 6);
-        
+
         // Create realistic access patterns from TPC-H data
         // Simulate hash-based register updates with realistic skew
-        let updates: Vec<(usize, u8)> = data.customer_ids.iter()
+        let updates: Vec<(usize, u8)> = data
+            .customer_ids
+            .iter()
             .chain(data.order_keys.iter())
             .take(10000)
             .enumerate()
@@ -146,7 +166,10 @@ fn test_cache_optimization_tpch(data: &TpchData) {
         cache_registers.update_max_batch_cache_optimized(&updates);
         let duration = start.elapsed();
 
-        println!("TPC-H cache-optimized updates: {:.2}ms", duration.as_millis());
+        println!(
+            "TPC-H cache-optimized updates: {:.2}ms",
+            duration.as_millis()
+        );
         println!("Cache statistics: {:?}", cache_registers.cache_statistics());
 
         // Test access pattern learning with realistic hotspots
@@ -157,7 +180,10 @@ fn test_cache_optimization_tpch(data: &TpchData) {
             let _ = cache_registers.get(register_idx);
         }
 
-        println!("After TPC-H access pattern learning: {:?}", cache_registers.cache_statistics());
+        println!(
+            "After TPC-H access pattern learning: {:?}",
+            cache_registers.cache_statistics()
+        );
     }
 
     #[cfg(not(feature = "optimized"))]
@@ -170,16 +196,18 @@ fn test_simd_acceleration_tpch(data: &TpchData) {
     #[cfg(feature = "optimized")]
     {
         use sketches::simd_ops::utils;
-        
+
         // Check SIMD capabilities
         let simd_available = utils::simd_available();
         let simd_features = utils::simd_features();
-        
+
         println!("SIMD available: {}", simd_available);
         println!("SIMD features: {:?}", simd_features);
-        
+
         // Test with realistic business data variety
-        let mixed_data: Vec<String> = data.customer_ids.iter()
+        let mixed_data: Vec<String> = data
+            .customer_ids
+            .iter()
             .chain(data.order_keys.iter())
             .chain(data.part_keys.iter())
             .take(50_000)
@@ -188,28 +216,37 @@ fn test_simd_acceleration_tpch(data: &TpchData) {
 
         if simd_available {
             println!("Testing SIMD-optimized batch processing with TPC-H data...");
-            
+
             let mut hll = HllSketch::new(12);
             let start = Instant::now();
             hll.update_batch(&mixed_data);
             let duration = start.elapsed();
-            
+
             println!("SIMD TPC-H batch processing: {:.2}ms", duration.as_millis());
             println!("Items processed: {}", mixed_data.len());
-            println!("Throughput: {:.0} items/sec", mixed_data.len() as f64 / duration.as_secs_f64());
+            println!(
+                "Throughput: {:.0} items/sec",
+                mixed_data.len() as f64 / duration.as_secs_f64()
+            );
             println!("Estimated cardinality: {:.0}", hll.estimate());
         } else {
             println!("SIMD optimizations not available - using standard processing");
-            
+
             let mut hll = HllSketch::new(12);
             let start = Instant::now();
             hll.update_batch(&mixed_data);
             let duration = start.elapsed();
-            
-            println!("Standard TPC-H batch processing: {:.2}ms", duration.as_millis());
-            println!("Throughput: {:.0} items/sec", mixed_data.len() as f64 / duration.as_secs_f64());
+
+            println!(
+                "Standard TPC-H batch processing: {:.2}ms",
+                duration.as_millis()
+            );
+            println!(
+                "Throughput: {:.0} items/sec",
+                mixed_data.len() as f64 / duration.as_secs_f64()
+            );
         }
-        
+
         // Test different TPC-H data characteristics
         println!("\nTesting different TPC-H data types:");
         println!("Customer IDs: {} unique items", data.customer_ids.len());
@@ -261,10 +298,10 @@ fn test_memory_pooling() {
         // Simulate realistic sketch size distribution
         for i in 0..50 {
             let size = match i % 4 {
-                0 => 512,    // Small customer sketches
-                1 => 2048,   // Medium order sketches
-                2 => 8192,   // Large lineitem sketches
-                _ => 32768,  // Very large aggregate sketches
+                0 => 512,   // Small customer sketches
+                1 => 2048,  // Medium order sketches
+                2 => 8192,  // Large lineitem sketches
+                _ => 32768, // Very large aggregate sketches
             };
             objects.push(pool.get(size));
         }
@@ -312,7 +349,10 @@ fn test_buffer_pooling() {
         println!("Buffer pool operations: {:.2}µs", duration.as_micros());
 
         let (u8_count, u64_count, hash_count) = buffer_pool.buffer_pool_stats();
-        println!("Buffers in pool: {} u8, {} u64, {} hash", u8_count, u64_count, hash_count);
+        println!(
+            "Buffers in pool: {} u8, {} u64, {} hash",
+            u8_count, u64_count, hash_count
+        );
     }
 
     #[cfg(not(feature = "optimized"))]
@@ -324,17 +364,19 @@ fn test_system_performance_tpch(data: &TpchData) {
 
     // Test 1: Customer cardinality estimation
     test_workload("Customer IDs", &data.customer_ids);
-    
+
     // Test 2: Order key cardinality
     test_workload("Order Keys", &data.order_keys);
-    
+
     // Test 3: High-cardinality lineitem data
     if data.lineitem_keys.len() > 50000 {
         test_workload("LineItem Keys", &data.lineitem_keys[..50000]);
     }
-    
+
     // Test 4: Mixed workload (realistic scenario)
-    let mixed_workload: Vec<String> = data.customer_ids.iter()
+    let mixed_workload: Vec<String> = data
+        .customer_ids
+        .iter()
         .chain(data.order_keys.iter())
         .chain(data.part_keys.iter())
         .take(100_000)
@@ -373,7 +415,10 @@ fn test_workload(name: &str, data: &[String]) {
 
     let memory_usage = sketch.to_bytes().len();
     let memory_per_item = memory_usage as f64 / data.len() as f64;
-    println!("  Memory: {} bytes ({:.3} bytes/item)", memory_usage, memory_per_item);
+    println!(
+        "  Memory: {} bytes ({:.3} bytes/item)",
+        memory_usage, memory_per_item
+    );
 }
 
 fn print_phase3_capabilities() {
@@ -417,7 +462,7 @@ fn print_phase3_capabilities() {
 fn hash_string(s: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
@@ -428,7 +473,7 @@ fn leading_zeros_plus_one(mut value: u64) -> u32 {
     if value == 0 {
         return 64;
     }
-    
+
     let mut count = 0;
     while (value & 0x8000000000000000) == 0 {
         count += 1;
