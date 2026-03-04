@@ -23,9 +23,14 @@ pub mod frequent;
 pub mod hll;
 pub mod linear;
 pub mod quantiles;
+pub mod req;
 pub mod sampling;
 pub mod tdigest;
 pub mod theta;
+pub mod tuple;
+pub mod varopt;
+
+pub mod serialization;
 
 // Performance optimization modules
 #[cfg(feature = "optimized")]
@@ -941,9 +946,7 @@ impl FrequentStringsSketch {
         dict.set_item("stream_length", stats.stream_length).unwrap();
         dict.set_item("total_tracked_frequency", stats.total_tracked_frequency)
             .unwrap();
-        dict.set_item("error_rate", stats.error_rate).unwrap();
-        dict.set_item("uses_reservoir", stats.uses_reservoir)
-            .unwrap();
+        dict.set_item("offset", stats.offset).unwrap();
         dict.set_item("memory_usage", stats.memory_usage).unwrap();
 
         dict.into()
@@ -1541,6 +1544,227 @@ impl AodSketch {
     }
 }
 
+/// Python binding for REQ (Relative Error Quantiles) sketch.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "ReqSketch")]
+pub struct ReqSketch {
+    inner: req::ReqSketch<f64>,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl ReqSketch {
+    /// Create a new REQ sketch.
+    /// mode: "HRA" for High Rank Accuracy, "LRA" for Low Rank Accuracy.
+    #[new]
+    fn new(k: usize, mode: Option<&str>) -> PyResult<Self> {
+        let req_mode = match mode.unwrap_or("HRA") {
+            "HRA" => req::ReqMode::HRA,
+            "LRA" => req::ReqMode::LRA,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown mode '{}', use 'HRA' or 'LRA'",
+                    other
+                )));
+            }
+        };
+        Ok(ReqSketch {
+            inner: req::ReqSketch::new(k, req_mode),
+        })
+    }
+
+    /// Update the sketch with a value.
+    pub fn update(&mut self, value: f64) {
+        self.inner.update(value);
+    }
+
+    /// Get quantile at given rank (0.0 to 1.0).
+    pub fn quantile(&mut self, rank: f64) -> Option<f64> {
+        self.inner.quantile(rank)
+    }
+
+    /// Get the rank of a value (0.0 to 1.0).
+    pub fn rank(&mut self, value: f64) -> f64 {
+        self.inner.rank(&value)
+    }
+
+    /// Get CDF at split points.
+    pub fn get_cdf(&mut self, split_points: Vec<f64>) -> Vec<f64> {
+        self.inner.get_cdf(&split_points)
+    }
+
+    /// Total items ingested.
+    pub fn count(&self) -> u64 {
+        self.inner.count()
+    }
+
+    /// Check if sketch is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Get the mode.
+    pub fn mode(&self) -> &str {
+        match self.inner.mode() {
+            req::ReqMode::HRA => "HRA",
+            req::ReqMode::LRA => "LRA",
+        }
+    }
+}
+
+/// Python binding for Tuple sketch with double summary.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "TupleSketch")]
+pub struct PyTupleSketch {
+    inner: tuple::TupleSketch<tuple::DoubleSummary>,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyTupleSketch {
+    /// Create a new Tuple sketch.
+    #[new]
+    fn new(k: Option<usize>) -> Self {
+        PyTupleSketch {
+            inner: tuple::TupleSketch::new(k.unwrap_or(4096)),
+        }
+    }
+
+    /// Update with item and value.
+    pub fn update(&mut self, item: &str, value: f64) {
+        self.inner.update(&item, value);
+    }
+
+    /// Estimate cardinality.
+    pub fn estimate(&self) -> f64 {
+        self.inner.estimate()
+    }
+
+    /// Get number of retained entries.
+    pub fn num_retained(&self) -> usize {
+        self.inner.num_retained()
+    }
+}
+
+/// Python binding for VarOpt sampling.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "VarOptSketch")]
+pub struct PyVarOptSketch {
+    inner: varopt::VarOptSketch<String>,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyVarOptSketch {
+    /// Create a new VarOpt sketch.
+    #[new]
+    fn new(k: usize) -> Self {
+        PyVarOptSketch {
+            inner: varopt::VarOptSketch::new(k),
+        }
+    }
+
+    /// Update with item and weight.
+    pub fn update(&mut self, item: &str, weight: f64) {
+        self.inner.update(item.to_string(), weight);
+    }
+
+    /// Get samples as list of (item, adjusted_weight) tuples.
+    pub fn get_samples(&self) -> Vec<(String, f64)> {
+        self.inner
+            .get_samples()
+            .into_iter()
+            .map(|(item, weight)| (item.clone(), weight))
+            .collect()
+    }
+
+    /// Get number of samples.
+    pub fn get_num_samples(&self) -> usize {
+        self.inner.get_num_samples()
+    }
+
+    /// Get total weight of all items seen.
+    pub fn get_total_weight(&self) -> f64 {
+        self.inner.get_total_weight()
+    }
+
+    /// Total items seen.
+    pub fn count(&self) -> u64 {
+        self.inner.count()
+    }
+}
+
+/// Python binding for HllSketchMode with List/Set/HLL mode transitions.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "HllSketchMode")]
+pub struct PyHllSketchMode {
+    inner: hll::HllSketchMode,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyHllSketchMode {
+    #[new]
+    fn new(lg_k: Option<u8>) -> Self {
+        PyHllSketchMode {
+            inner: hll::HllSketchMode::new(lg_k.unwrap_or(12)),
+        }
+    }
+
+    pub fn update(&mut self, item: &str) -> PyResult<()> {
+        self.inner.update(&item);
+        Ok(())
+    }
+
+    pub fn estimate(&self) -> f64 {
+        self.inner.estimate()
+    }
+
+    pub fn mode(&self) -> String {
+        self.inner.mode_name().to_string()
+    }
+
+    pub fn is_out_of_order(&self) -> bool {
+        self.inner.is_out_of_order()
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        self.inner.memory_usage()
+    }
+}
+
+/// Python binding for HllUnion.
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "HllUnion")]
+pub struct PyHllUnion {
+    inner: hll::HllUnion,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyHllUnion {
+    #[new]
+    fn new(lg_max_k: Option<u8>) -> Self {
+        PyHllUnion {
+            inner: hll::HllUnion::new(lg_max_k.unwrap_or(12)),
+        }
+    }
+
+    pub fn update(&mut self, item: &str) -> PyResult<()> {
+        self.inner.update(&item);
+        Ok(())
+    }
+
+    pub fn update_with_sketch(&mut self, sketch: &PyHllSketchMode) -> PyResult<()> {
+        self.inner.update_with_sketch(&sketch.inner);
+        Ok(())
+    }
+
+    pub fn estimate(&self) -> f64 {
+        self.inner.estimate()
+    }
+}
+
 /// Python module definition
 #[cfg(feature = "extension-module")]
 #[pymodule]
@@ -1566,6 +1790,11 @@ fn sketches(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StreamingTDigest>()?;
     m.add_class::<ThetaSketch>()?;
     m.add_class::<AodSketch>()?;
+    m.add_class::<ReqSketch>()?;
+    m.add_class::<PyTupleSketch>()?;
+    m.add_class::<PyVarOptSketch>()?;
+    m.add_class::<PyHllSketchMode>()?;
+    m.add_class::<PyHllUnion>()?;
 
     // Build info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
