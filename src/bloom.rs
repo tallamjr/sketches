@@ -35,7 +35,7 @@ impl BloomFilter {
         let num_hash_functions = Self::calculate_num_hash_functions(num_bits, capacity);
 
         // Use u64 chunks for better SIMD alignment
-        let num_u64s = (num_bits + 63) / 64;
+        let num_u64s = num_bits.div_ceil(64);
 
         BloomFilter {
             bit_array: vec![0u64; num_u64s],
@@ -425,7 +425,7 @@ mod tests {
 
         // Add 1000 items
         for i in 0..1000 {
-            filter.add(&format!("item_{}", i));
+            filter.add(&format!("item_{i}"));
         }
 
         // Check false positive rate with new items
@@ -433,7 +433,7 @@ mod tests {
         let test_count = 10000;
 
         for i in 1000..(1000 + test_count) {
-            if filter.contains(&format!("item_{}", i)) {
+            if filter.contains(&format!("item_{i}")) {
                 false_positives += 1;
             }
         }
@@ -441,11 +441,7 @@ mod tests {
         let fp_rate = false_positives as f64 / test_count as f64;
 
         // Should be approximately 1% (with some tolerance)
-        assert!(
-            fp_rate < 0.05,
-            "False positive rate {} is too high",
-            fp_rate
-        );
+        assert!(fp_rate < 0.05, "False positive rate {fp_rate} is too high");
     }
 
     #[test]

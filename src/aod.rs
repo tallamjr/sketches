@@ -338,7 +338,7 @@ impl AodSketch {
     /// Deserialize sketch from bytes (simple implementation)
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let data: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+            serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON: {e}"))?;
 
         let config = AodConfig {
             capacity: data["config"]["capacity"].as_u64().unwrap_or(4096) as usize,
@@ -437,7 +437,7 @@ mod tests {
 
         // Add many entries to trigger sampling
         for i in 0..100 {
-            sketch.update(&format!("key{}", i), &[i as f64]).unwrap();
+            sketch.update(&format!("key{i}"), &[i as f64]).unwrap();
         }
 
         // Should have triggered sampling
@@ -455,7 +455,7 @@ mod tests {
         let mut sketch = AodSketch::with_capacity_and_values(100, 1);
 
         for i in 0..50 {
-            sketch.update(&format!("key{}", i), &[i as f64]).unwrap();
+            sketch.update(&format!("key{i}"), &[i as f64]).unwrap();
         }
 
         let estimate = sketch.estimate();

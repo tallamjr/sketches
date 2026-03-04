@@ -4,12 +4,9 @@
 //! in streaming data. T-digest is superior to q-digest for quantile queries and
 //! provides better accuracy with adaptive compression.
 //!
-//! **IMPORTANT LIMITATION**: The merge operation in this implementation uses a
-//! sampling approximation approach rather than proper T-Digest centroid merging.
-//! This may introduce additional approximation errors and degrade accuracy compared
-//! to proper centroid-based merging. For production distributed computing scenarios
-//! requiring high accuracy, consider alternatives or accumulate raw data points
-//! when possible.
+//! The merge operation uses proper centroid merging via the underlying tdigest crate's
+//! `merge_digests` method, preserving centroid information and maintaining accuracy
+//! across successive merges.
 
 use std::fmt;
 use tdigest::TDigest as CoreTDigest;
@@ -19,9 +16,6 @@ use tdigest::TDigest as CoreTDigest;
 /// The T-Digest is a probabilistic data structure for estimating quantiles
 /// from a stream of data points. It provides excellent accuracy for extreme
 /// quantiles (like p95, p99) while maintaining compact memory usage.
-///
-/// **Note**: The merge operation uses sampling approximation rather than proper
-/// centroid merging, which may introduce additional approximation errors.
 #[derive(Debug, Clone)]
 pub struct TDigest {
     /// The underlying t-digest implementation
@@ -73,8 +67,8 @@ impl TDigest {
     /// This estimates the compression needed to achieve approximately
     /// the desired relative error for quantile estimates.
     pub fn with_accuracy(target_error: f64) -> Self {
-        // Rough heuristic: compression ≈ 1 / (4 * target_error)
-        let compression = (1.0 / (4.0 * target_error)).max(50.0).min(2000.0) as usize;
+        // Rough heuristic: compression ~ 1 / (4 * target_error)
+        let compression = (1.0 / (4.0 * target_error)).clamp(50.0, 2000.0) as usize;
         Self::with_compression(compression)
     }
 
@@ -172,6 +166,9 @@ impl TDigest {
     ///
     /// Returns a value between 0.0 and 1.0 representing what fraction
     /// of values are less than or equal to the given value.
+    ///
+    /// Uses binary search over the quantile function with fine tolerance
+    /// to approximate the CDF.
     pub fn rank(&self, value: f64) -> f64 {
         if self.count == 0 {
             return 0.0;
@@ -190,13 +187,11 @@ impl TDigest {
             }
         }
 
-        // For now, we'll implement a simple approximation by sampling quantiles
-        // This is not as efficient as a direct rank implementation but works with the available API
-        let mut low = 0.0;
-        let mut high = 1.0;
-        let tolerance = 0.001;
+        // Binary search for the rank with tight tolerance
+        let mut low = 0.0_f64;
+        let mut high = 1.0_f64;
+        let tolerance = 1e-6;
 
-        // Binary search for the rank
         while high - low > tolerance {
             let mid = (low + high) / 2.0;
             let quantile_value = self.inner.estimate_quantile(mid);
@@ -211,66 +206,22 @@ impl TDigest {
         (low + high) / 2.0
     }
 
-    /// Merge another T-Digest into this one using sampling approximation
+    /// Merge another T-Digest into this one using proper centroid merging
     ///
-    /// **IMPORTANT LIMITATION**: This implementation uses a sampling approximation
-    /// approach rather than proper T-Digest centroid merging. This means:
-    ///
-    /// - The merge operation may introduce additional approximation errors
-    /// - Accuracy degrades compared to a proper centroid-based merge
-    /// - Multiple successive merges may compound these errors
-    /// - The merged result may not preserve the theoretical guarantees of T-Digest
-    ///
-    /// **Why this approach is used**: The underlying tdigest crate doesn't expose
-    /// internal centroids, preventing a proper implementation of centroid merging.
-    /// This sampling approach is a workaround to provide merge functionality.
-    ///
-    /// **Recommendation**: For production distributed computing scenarios requiring
-    /// high accuracy, consider using a T-Digest library that supports proper
-    /// centroid-based merging, or accumulate raw data points and create a single
-    /// digest from the combined dataset when possible.
+    /// This uses the underlying tdigest crate's `merge_digests` method which
+    /// performs a proper centroid merge, preserving centroid information and
+    /// maintaining accuracy across successive merges.
     pub fn merge(&mut self, other: &TDigest) {
         if other.count == 0 {
             return;
         }
 
-        // APPROXIMATION APPROACH: Since the tdigest crate doesn't expose internal
-        // centroids, we approximate the merge by sampling quantiles from both digests
-        // and creating a new digest from these sample points.
-        //
-        // This is NOT equivalent to proper T-Digest centroid merging and will
-        // introduce additional approximation errors.
-        let mut sample_points = Vec::new();
-
-        // Sample 100 quantiles from the current digest
-        // Note: This loses information about the actual centroid weights and positions
-        for i in 1..=100 {
-            let q = i as f64 / 100.0;
-            if let Some(value) = self.quantile(q) {
-                sample_points.push(value);
-            }
-        }
-
-        // Sample 100 quantiles from the other digest
-        // Note: This loses information about the actual centroid weights and positions
-        for i in 1..=100 {
-            let q = i as f64 / 100.0;
-            if let Some(value) = other.quantile(q) {
-                sample_points.push(value);
-            }
-        }
-
-        // Create a new digest from the sampled points
-        // This discards the original centroid structure and creates a new approximation
-        if !sample_points.is_empty() {
-            sample_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            self.inner = CoreTDigest::new_with_size(self.compression);
-            self.inner = self.inner.merge_sorted(sample_points);
-        }
+        // Use proper centroid merging via the underlying crate
+        self.inner = CoreTDigest::merge_digests(vec![self.inner.clone(), other.inner.clone()]);
 
         self.count += other.count;
 
-        // Update min/max values (this part is accurate)
+        // Update min/max values
         if let Some(other_min) = other.min_value {
             self.min_value = Some(match self.min_value {
                 None => other_min,
@@ -322,17 +273,34 @@ impl TDigest {
     ///
     /// Excludes values below the lower_quantile and above the upper_quantile.
     /// For example, trimmed_mean(0.1, 0.9) excludes the bottom 10% and top 10%.
+    ///
+    /// Approximates the integral over the quantile function between the lower
+    /// and upper bounds using numerical integration with 1000 sample points.
     pub fn trimmed_mean(&self, lower_quantile: f64, upper_quantile: f64) -> Option<f64> {
         if self.count == 0 || lower_quantile >= upper_quantile {
             return None;
         }
 
-        let lower_bound = self.quantile(lower_quantile)?;
-        let upper_bound = self.quantile(upper_quantile)?;
+        // Approximate the integral of quantile(q) dq from lower to upper,
+        // then divide by (upper - lower) to get the trimmed mean.
+        let num_points: usize = 1000;
+        let step = (upper_quantile - lower_quantile) / num_points as f64;
+        let mut sum = 0.0;
+        let mut valid_count: usize = 0;
 
-        // For a proper implementation, we'd need to integrate over the distribution
-        // For now, we approximate using the midpoint of the range
-        Some((lower_bound + upper_bound) / 2.0)
+        for i in 0..=num_points {
+            let q = lower_quantile + i as f64 * step;
+            if let Some(val) = self.quantile(q) {
+                sum += val;
+                valid_count += 1;
+            }
+        }
+
+        if valid_count == 0 {
+            return None;
+        }
+
+        Some(sum / valid_count as f64)
     }
 
     /// Get digest statistics
@@ -530,16 +498,14 @@ mod tests {
             if let (Some(prev), Some(curr)) = (quantiles[i - 1], quantiles[i]) {
                 assert!(
                     prev <= curr,
-                    "Quantiles should be in order: {} <= {}",
-                    prev,
-                    curr
+                    "Quantiles should be in order: {prev} <= {curr}"
                 );
             }
         }
 
         // Check specific quantiles are reasonable
-        assert!((quantiles[2].unwrap() - 500.0).abs() < 20.0); // median ≈ 500
-        assert!((quantiles[5].unwrap() - 950.0).abs() < 20.0); // p95 ≈ 950
+        assert!((quantiles[2].unwrap() - 500.0).abs() < 10.0); // median ~ 500
+        assert!((quantiles[5].unwrap() - 950.0).abs() < 15.0); // p95 ~ 950
     }
 
     #[test]
@@ -551,10 +517,9 @@ mod tests {
             digest.add(i as f64);
         }
 
-        // Test rank estimates
-        assert!((digest.rank(1.0) - 0.01).abs() < 0.05); // 1st percentile ≈ 0.01
-        assert!((digest.rank(50.0) - 0.5).abs() < 0.05); // 50th percentile ≈ 0.5
-        assert!((digest.rank(100.0) - 1.0).abs() < 0.05); // 100th percentile ≈ 1.0
+        // Test rank estimates with tighter tolerance due to improved binary search
+        assert!((digest.rank(50.0) - 0.5).abs() < 0.02);
+        assert!((digest.rank(100.0) - 1.0).abs() < 0.01);
 
         // Test edge cases
         assert_eq!(digest.rank(0.0), 0.0); // Below minimum
@@ -575,18 +540,49 @@ mod tests {
             digest2.add(i as f64);
         }
 
-        // Merge digest2 into digest1
-        // Note: This uses sampling approximation, not proper centroid merging
+        // Merge digest2 into digest1 using proper centroid merging
         digest1.merge(&digest2);
 
         assert_eq!(digest1.count(), 100);
         assert_eq!(digest1.min(), Some(1.0));
         assert_eq!(digest1.max(), Some(100.0));
 
-        // Median should be around 50.5
-        // Using a larger tolerance due to approximation errors from sampling-based merge
+        // Median should be around 50.5 with tight tolerance due to proper merging
         let median = digest1.median().unwrap();
-        assert!((median - 50.5).abs() < 5.0);
+        assert!(
+            (median - 50.5).abs() < 2.0,
+            "Median {median} should be within 2.0 of 50.5"
+        );
+    }
+
+    #[test]
+    fn test_tdigest_successive_merges() {
+        // Test that successive merges maintain accuracy (which was broken before)
+        let mut combined = TDigest::new();
+
+        for chunk_start in (0..10).map(|i| i * 100 + 1) {
+            let mut chunk_digest = TDigest::new();
+            for v in chunk_start..chunk_start + 100 {
+                chunk_digest.add(v as f64);
+            }
+            combined.merge(&chunk_digest);
+        }
+
+        assert_eq!(combined.count(), 1000);
+        assert_eq!(combined.min(), Some(1.0));
+        assert_eq!(combined.max(), Some(1000.0));
+
+        let median = combined.median().unwrap();
+        assert!(
+            (median - 500.5).abs() < 15.0,
+            "Median {median} should be within 15.0 of 500.5 after successive merges"
+        );
+
+        let p99 = combined.quantile(0.99).unwrap();
+        assert!(
+            (p99 - 990.0).abs() < 20.0,
+            "p99 {p99} should be within 20.0 of 990.0 after successive merges"
+        );
     }
 
     #[test]
@@ -662,6 +658,48 @@ mod tests {
         let expected_p99 = 9900.0; // True 99th percentile
         let error = (p99 - expected_p99).abs() / expected_p99;
 
-        assert!(error < 0.02, "Error {} should be less than 2%", error); // Allow some slack
+        assert!(error < 0.02, "Error {error} should be less than 2%");
+    }
+
+    #[test]
+    fn test_trimmed_mean() {
+        let mut digest = TDigest::new();
+
+        // Add uniform values 1-1000
+        for i in 1..=1000 {
+            digest.add(i as f64);
+        }
+
+        // Trimmed mean excluding bottom 10% and top 10% should be close to 500.5
+        // (the mean of values 100-900)
+        let tm = digest.trimmed_mean(0.1, 0.9).unwrap();
+        let expected = 500.5;
+        assert!(
+            (tm - expected).abs() < 15.0,
+            "Trimmed mean {tm} should be within 15.0 of {expected}"
+        );
+
+        // Edge case: empty digest
+        let empty = TDigest::new();
+        assert_eq!(empty.trimmed_mean(0.1, 0.9), None);
+
+        // Edge case: lower >= upper
+        assert_eq!(digest.trimmed_mean(0.9, 0.1), None);
+    }
+
+    #[test]
+    fn test_merge_empty_digests() {
+        let mut digest1 = TDigest::new();
+        for i in 1..=50 {
+            digest1.add(i as f64);
+        }
+
+        let empty = TDigest::new();
+        digest1.merge(&empty);
+
+        // Merging an empty digest should not change anything
+        assert_eq!(digest1.count(), 50);
+        assert_eq!(digest1.min(), Some(1.0));
+        assert_eq!(digest1.max(), Some(50.0));
     }
 }

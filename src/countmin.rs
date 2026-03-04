@@ -526,7 +526,7 @@ mod tests {
         let mut cm = CountMinSketch::new(100, 5, false, false);
 
         for i in 0..50 {
-            cm.update(&format!("item_{}", i), (i % 10) as u64 + 1);
+            cm.update(&format!("item_{i}"), (i % 10) as u64 + 1);
         }
 
         let stats = cm.statistics();

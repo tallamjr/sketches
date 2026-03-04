@@ -23,7 +23,7 @@ impl LinearCounter {
         assert!(num_bits > 0, "Number of bits must be positive");
 
         // Round up to nearest multiple of 64 for alignment
-        let aligned_bits = ((num_bits + 63) / 64) * 64;
+        let aligned_bits = num_bits.div_ceil(64) * 64;
         let num_u64s = aligned_bits / 64;
 
         LinearCounter {
@@ -265,7 +265,7 @@ impl HybridCounter {
             14
         };
 
-        let linear_bits = (max_expected_cardinality / 10).max(1024).min(16384);
+        let linear_bits = (max_expected_cardinality / 10).clamp(1024, 16384);
         let transition_threshold = linear_bits / 10;
 
         Self::new(linear_bits, lg_k, transition_threshold)
@@ -378,11 +378,7 @@ mod tests {
         let estimate = lc.estimate();
         let error = (estimate - 100.0).abs() / 100.0;
 
-        assert!(
-            error < 0.1,
-            "Error {} too high for small cardinality",
-            error
-        );
+        assert!(error < 0.1, "Error {error} too high for small cardinality");
         assert!(lc.bits_set > 0);
         assert!(lc.fill_ratio() > 0.0);
     }
@@ -393,7 +389,7 @@ mod tests {
 
         // Add known number of unique items
         for i in 0..300 {
-            lc.update(&format!("item_{}", i));
+            lc.update(&format!("item_{i}"));
         }
 
         let estimate = lc.estimate();
@@ -493,9 +489,8 @@ mod tests {
 
         let estimate = lc.estimate();
         assert!(
-            estimate >= 0.8 && estimate <= 1.2,
-            "Estimate {} should be close to 1",
-            estimate
+            (0.8..=1.2).contains(&estimate),
+            "Estimate {estimate} should be close to 1"
         );
     }
 

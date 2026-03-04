@@ -440,7 +440,7 @@ mod tests {
 
         // Add more items
         for i in 0..10 {
-            sampler.add_weighted(format!("item_{}", i), 1.0);
+            sampler.add_weighted(format!("item_{i}"), 1.0);
         }
 
         assert_eq!(sampler.sample().len(), 3);
@@ -524,8 +524,7 @@ mod tests {
         for &count in &counts {
             assert!(
                 count > 300 && count < 700,
-                "Count {} not in expected range",
-                count
+                "Count {count} not in expected range"
             );
         }
     }
