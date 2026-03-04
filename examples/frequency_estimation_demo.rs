@@ -60,10 +60,7 @@ fn main() {
         } else {
             0.0
         };
-        println!(
-            "{:<12} {:<8} {:<10} {:<7.1}%",
-            item, actual, estimated, error
-        );
+        println!("{item:<12} {actual:<8} {estimated:<10} {error:<7.1}%");
     }
 
     // Test non-existent item
@@ -106,15 +103,8 @@ fn main() {
     for (item, &actual) in &actual_counts {
         let standard_est = cm.estimate(item);
         let conservative_est = cm_conservative.estimate(item);
-        let diff = if standard_est >= conservative_est {
-            standard_est - conservative_est
-        } else {
-            conservative_est - standard_est
-        };
-        println!(
-            "{:<12} {:<10} {:<13} {:<10}",
-            item, standard_est, conservative_est, diff
-        );
+        let diff = standard_est.abs_diff(conservative_est);
+        println!("{item:<12} {standard_est:<10} {conservative_est:<13} {diff:<10}");
     }
 
     println!("\n{}", "=".repeat(50));
@@ -191,15 +181,15 @@ fn main() {
     let heavy_threshold = 300;
     let heavy_hitters = cm_heavy.heavy_hitters(heavy_threshold);
 
-    println!("Heavy hitters (count ≥ {}):", heavy_threshold);
+    println!("Heavy hitters (count ≥ {heavy_threshold}):");
     for &(item, count) in &zipf_data {
         let estimated = cm_heavy.estimate(&item);
         if estimated >= heavy_threshold {
-            println!("  {}: {} (estimated), {} (actual)", item, estimated, count);
+            println!("  {item}: {estimated} (estimated), {count} (actual)");
         }
     }
 
-    println!("\nDetected heavy hitter counts: {:?}", heavy_hitters);
+    println!("\nDetected heavy hitter counts: {heavy_hitters:?}");
 
     println!("\n{}", "=".repeat(50));
 
@@ -208,7 +198,7 @@ fn main() {
     println!("{}", "-".repeat(25));
 
     let n_items = 100000;
-    println!("Testing with {} updates", n_items);
+    println!("Testing with {n_items} updates");
 
     // Standard Count-Min Sketch
     let start = std::time::Instant::now();
@@ -226,8 +216,8 @@ fn main() {
     }
     let simd_time = start.elapsed();
 
-    println!("Standard implementation: {:?}", standard_time);
-    println!("SIMD implementation: {:?}", simd_time);
+    println!("Standard implementation: {standard_time:?}");
+    println!("SIMD implementation: {simd_time:?}");
     println!(
         "Speedup: {:.2}x",
         standard_time.as_nanos() as f64 / simd_time.as_nanos() as f64
@@ -267,8 +257,8 @@ fn main() {
     let after_merge = cm1.estimate(&"common_item_0");
 
     println!("Merged two sketches");
-    println!("Item count before merge: {}", before_merge);
-    println!("Item count after merge: {}", after_merge);
+    println!("Item count before merge: {before_merge}");
+    println!("Item count after merge: {after_merge}");
     println!("Expected increase: ~{}", 300 / 100); // Approximately
 
     println!("\nDemo completed successfully!");

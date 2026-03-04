@@ -14,7 +14,7 @@ fn main() {
     let items = vec!["apple", "banana", "cherry", "date", "elderberry"];
     for item in &items {
         bloom.add(item);
-        println!("Added: {}", item);
+        println!("Added: {item}");
     }
 
     // Test membership
@@ -43,7 +43,7 @@ fn main() {
     );
     println!("  Using SIMD: {}", stats.uses_simd);
 
-    println!("");
+    println!();
     println!("{}", "=".repeat(50));
 
     // Counting Bloom Filter Demo
@@ -68,7 +68,7 @@ fn main() {
     // Remove items
     println!("\nRemoving item1 once:");
     let removed = counting_bloom.remove(&"item1");
-    println!("Removal successful: {}", removed);
+    println!("Removal successful: {removed}");
     println!(
         "item1 still in filter: {}",
         counting_bloom.contains(&"item1")
@@ -76,7 +76,7 @@ fn main() {
 
     println!("\nRemoving item1 again:");
     let removed = counting_bloom.remove(&"item1");
-    println!("Removal successful: {}", removed);
+    println!("Removal successful: {removed}");
     println!(
         "item1 still in filter: {}",
         counting_bloom.contains(&"item1")
@@ -84,9 +84,9 @@ fn main() {
 
     println!("\nTrying to remove item3 (not in filter):");
     let removed = counting_bloom.remove(&"item3");
-    println!("Removal successful: {}", removed);
+    println!("Removal successful: {removed}");
 
-    println!("");
+    println!();
     println!("{}", "=".repeat(50));
 
     // Performance comparison
@@ -94,13 +94,13 @@ fn main() {
     println!("{}", "-".repeat(30));
 
     let n_items = 100000;
-    println!("Testing with {} items", n_items);
+    println!("Testing with {n_items} items");
 
     // Standard implementation
     let start = std::time::Instant::now();
     let mut bloom_standard = BloomFilter::new(n_items, 0.01, false);
     for i in 0..n_items {
-        bloom_standard.add(&format!("item_{}", i));
+        bloom_standard.add(&format!("item_{i}"));
     }
     let standard_time = start.elapsed();
 
@@ -108,12 +108,12 @@ fn main() {
     let start = std::time::Instant::now();
     let mut bloom_simd = BloomFilter::new(n_items, 0.01, true);
     for i in 0..n_items {
-        bloom_simd.add(&format!("item_{}", i));
+        bloom_simd.add(&format!("item_{i}"));
     }
     let simd_time = start.elapsed();
 
-    println!("Standard implementation: {:?}", standard_time);
-    println!("SIMD implementation: {:?}", simd_time);
+    println!("Standard implementation: {standard_time:?}");
+    println!("SIMD implementation: {simd_time:?}");
     println!(
         "Speedup: {:.2}x",
         standard_time.as_nanos() as f64 / simd_time.as_nanos() as f64
@@ -129,7 +129,7 @@ fn main() {
         bloom_standard.contains(&test_item) && bloom_simd.contains(&test_item)
     );
 
-    println!("");
+    println!();
     println!("{}", "=".repeat(50));
 
     // False positive rate analysis
@@ -140,7 +140,7 @@ fn main() {
 
     // Add 10,000 items
     for i in 0..10000 {
-        bloom_test.add(&format!("known_item_{}", i));
+        bloom_test.add(&format!("known_item_{i}"));
     }
 
     // Test with 10,000 new items
@@ -148,7 +148,7 @@ fn main() {
     let test_count = 10000;
 
     for i in 0..test_count {
-        if bloom_test.contains(&format!("unknown_item_{}", i)) {
+        if bloom_test.contains(&format!("unknown_item_{i}")) {
             false_positives += 1;
         }
     }

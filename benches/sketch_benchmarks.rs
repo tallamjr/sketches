@@ -5,7 +5,7 @@ use sketches::{
 };
 
 fn generate_test_strings(count: usize) -> Vec<String> {
-    (0..count).map(|i| format!("item_{:08}", i)).collect()
+    (0..count).map(|i| format!("item_{i:08}")).collect()
 }
 
 fn generate_test_numbers(count: usize) -> Vec<f64> {
@@ -97,7 +97,7 @@ fn bench_bloom_filter(c: &mut Criterion) {
                 }
                 // Test some lookups
                 for i in 0..100 {
-                    black_box(filter.contains(&format!("item_{:08}", i)));
+                    black_box(filter.contains(&format!("item_{i:08}")));
                 }
             })
         });
@@ -120,7 +120,7 @@ fn bench_count_min_sketch(c: &mut Criterion) {
                 }
                 // Test some queries
                 for i in 0..100 {
-                    black_box(sketch.estimate(&format!("item_{:08}", i)));
+                    black_box(sketch.estimate(&format!("item_{i:08}")));
                 }
             })
         });

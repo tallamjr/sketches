@@ -25,12 +25,12 @@ fn main() {
 
     // Add elements to first sketch
     for i in 0..5000 {
-        theta1.update(&format!("user_{}", i));
+        theta1.update(&format!("user_{i}"));
     }
 
     // Add elements to second sketch (with overlap)
     for i in 2500..7500 {
-        theta2.update(&format!("user_{}", i));
+        theta2.update(&format!("user_{i}"));
     }
 
     println!("   Sketch 1: ~5,000 users (0-4999)");
@@ -47,7 +47,7 @@ fn main() {
     let mut cpc = CpcSketch::new(11); // lg_k parameter
 
     for i in 0..1000 {
-        cpc.update(&format!("item_{}", i));
+        cpc.update(&format!("item_{i}"));
     }
 
     println!("   Added 1,000 unique items");

@@ -9,7 +9,7 @@ fn main() {
     let mut hll = HllSketch::new(12); // precision 12
 
     for i in 0..10000 {
-        hll.update(&format!("item_{}", i));
+        hll.update(&format!("item_{i}"));
     }
 
     println!("   Added 10,000 unique items");
@@ -22,14 +22,14 @@ fn main() {
 
     // Add some overlapping data
     for i in 0..5000 {
-        theta1.update(&format!("common_{}", i));
-        theta2.update(&format!("common_{}", i));
+        theta1.update(&format!("common_{i}"));
+        theta2.update(&format!("common_{i}"));
     }
 
     // Add unique data to each
     for i in 0..3000 {
-        theta1.update(&format!("unique1_{}", i));
-        theta2.update(&format!("unique2_{}", i));
+        theta1.update(&format!("unique1_{i}"));
+        theta2.update(&format!("unique2_{i}"));
     }
 
     println!("   Theta1 estimate: {:.0}", theta1.estimate());
@@ -46,7 +46,7 @@ fn main() {
     let mut cpc = CpcSketch::new(11); // lg_k = 11
 
     for i in 0..8000 {
-        cpc.update(&format!("cpc_item_{}", i));
+        cpc.update(&format!("cpc_item_{i}"));
     }
 
     println!("   Added 8,000 unique items");
@@ -58,7 +58,7 @@ fn main() {
 
     // Add items
     for i in 0..5000 {
-        bloom.add(&format!("bloom_item_{}", i));
+        bloom.add(&format!("bloom_item_{i}"));
     }
 
     // Test membership

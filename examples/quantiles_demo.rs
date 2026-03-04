@@ -70,7 +70,7 @@ fn main() {
 
     // Simulate a large dataset
     let n_samples = 100000;
-    println!("Processing {} samples from normal distribution", n_samples);
+    println!("Processing {n_samples} samples from normal distribution");
 
     let start = std::time::Instant::now();
 
@@ -87,7 +87,7 @@ fn main() {
     }
 
     let duration = start.elapsed();
-    println!("Processing completed in {:?}", duration);
+    println!("Processing completed in {duration:?}");
 
     // Analyze the distribution
     println!("\nDistribution Analysis:");

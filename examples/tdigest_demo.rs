@@ -167,7 +167,7 @@ fn streaming_quantiles_demo() {
         // Show current quantiles
         let median = streaming.quantile(0.5).unwrap_or(0.0);
         let p95 = streaming.quantile(0.95).unwrap_or(0.0);
-        println!("  Current median: {:.1}, P95: {:.1}", median, p95);
+        println!("  Current median: {median:.1}, P95: {p95:.1}");
     }
 
     println!("\nFinal streaming statistics:");
@@ -244,7 +244,7 @@ fn performance_benchmark_demo() {
     let compressions = [50, 100, 200, 500];
 
     for &size in &data_sizes {
-        println!("Benchmarking with {} data points:", size);
+        println!("Benchmarking with {size} data points:");
 
         // Generate test data
         let mut rng = thread_rng();

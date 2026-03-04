@@ -66,7 +66,7 @@ fn load_tpch_data() -> TpchData {
             } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
-                    customer_ids.push(format!("CUST_{}", first_field));
+                    customer_ids.push(format!("CUST_{first_field}"));
                 }
             }
         }
@@ -84,7 +84,7 @@ fn load_tpch_data() -> TpchData {
             } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
-                    order_keys.push(format!("ORD_{}", first_field));
+                    order_keys.push(format!("ORD_{first_field}"));
                 }
             }
         }
@@ -125,7 +125,7 @@ fn load_tpch_data() -> TpchData {
             } // Limit for performance
             if let Ok(line) = line {
                 if let Some(first_field) = line.split(',').next() {
-                    part_keys.push(format!("PART_{}", first_field));
+                    part_keys.push(format!("PART_{first_field}"));
                 }
             }
         }
@@ -387,7 +387,7 @@ fn test_system_performance_tpch(data: &TpchData) {
 
 fn test_workload(name: &str, data: &[String]) {
     if data.is_empty() {
-        println!("{}: No data available", name);
+        println!("{name}: No data available");
         return;
     }
 
@@ -407,18 +407,15 @@ fn test_workload(name: &str, data: &[String]) {
     let estimate = sketch.estimate();
     let error = ((estimate - data.len() as f64) / data.len() as f64 * 100.0).abs();
 
-    println!("\n{} Performance:", name);
+    println!("\n{name} Performance:");
     println!("  Dataset size: {} items", data.len());
-    println!("  Throughput: {:.0} items/sec", throughput);
-    println!("  Accuracy: {:.0} estimate ({:.2}% error)", estimate, error);
+    println!("  Throughput: {throughput:.0} items/sec");
+    println!("  Accuracy: {estimate:.0} estimate ({error:.2}% error)");
     println!("  Processing time: {:.2}ms", duration.as_millis());
 
     let memory_usage = sketch.to_bytes().len();
     let memory_per_item = memory_usage as f64 / data.len() as f64;
-    println!(
-        "  Memory: {} bytes ({:.3} bytes/item)",
-        memory_usage, memory_per_item
-    );
+    println!("  Memory: {memory_usage} bytes ({memory_per_item:.3} bytes/item)");
 }
 
 fn print_phase3_capabilities() {

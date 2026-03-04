@@ -10,12 +10,9 @@ fn main() {
     // Test parameters
     let precision = 12;
     let num_items = 1_000_000;
-    let test_data: Vec<String> = (0..num_items).map(|i| format!("item_{}", i)).collect();
+    let test_data: Vec<String> = (0..num_items).map(|i| format!("item_{i}")).collect();
 
-    println!(
-        "Testing HLL Sketch with {} items (precision = {})",
-        num_items, precision
-    );
+    println!("Testing HLL Sketch with {num_items} items (precision = {precision})");
 
     // Test individual updates
     test_individual_updates(&test_data, precision);
@@ -59,8 +56,8 @@ fn test_individual_updates(data: &[String], precision: u8) {
     let error = ((estimate - data.len() as f64) / data.len() as f64 * 100.0).abs();
 
     println!("Time: {:.2}s", duration.as_secs_f64());
-    println!("Throughput: {:.0} items/sec", throughput);
-    println!("Estimate: {:.0} (error: {:.2}%)", estimate, error);
+    println!("Throughput: {throughput:.0} items/sec");
+    println!("Estimate: {estimate:.0} (error: {error:.2}%)");
 }
 
 #[cfg(feature = "optimized")]
@@ -89,7 +86,7 @@ fn test_memory_usage(precision: u8) {
     let sketch = HllSketch::new(precision);
     let registers_memory = sketch.to_bytes().len();
 
-    println!("Standard sketch memory: {} bytes", registers_memory);
+    println!("Standard sketch memory: {registers_memory} bytes");
 
     #[cfg(feature = "optimized")]
     {
@@ -110,7 +107,7 @@ fn test_hash_performance(data: &[String]) {
     let sample_size = 100_000;
     let sample_data = &data[..sample_size.min(data.len())];
 
-    println!("Hashing {} items...", sample_size);
+    println!("Hashing {sample_size} items...");
 
     #[cfg(feature = "optimized")]
     {
@@ -143,7 +140,7 @@ fn test_hash_performance(data: &[String]) {
     let duration = start.elapsed();
     let throughput = sample_size as f64 / duration.as_secs_f64();
 
-    println!("DefaultHasher throughput: {:.0} hashes/sec", throughput);
+    println!("DefaultHasher throughput: {throughput:.0} hashes/sec");
 }
 
 fn test_bloom_filter_optimizations(data: &[String]) {
@@ -167,7 +164,7 @@ fn test_bloom_filter_optimizations(data: &[String]) {
 
     let duration = start.elapsed();
     let throughput = sample_data.len() as f64 / duration.as_secs_f64();
-    println!("Bloom filter (no SIMD): {:.0} items/sec", throughput);
+    println!("Bloom filter (no SIMD): {throughput:.0} items/sec");
 
     // Test with SIMD
     let mut bloom_with_simd = BloomFilter::new(capacity, error_rate, true);
@@ -183,7 +180,7 @@ fn test_bloom_filter_optimizations(data: &[String]) {
 
     let duration = start.elapsed();
     let throughput = sample_data.len() as f64 / duration.as_secs_f64();
-    println!("Bloom filter (with SIMD): {:.0} items/sec", throughput);
+    println!("Bloom filter (with SIMD): {throughput:.0} items/sec");
 
     // Test query performance
     let start = Instant::now();
@@ -199,7 +196,7 @@ fn test_bloom_filter_optimizations(data: &[String]) {
 
     let duration = start.elapsed();
     let throughput = sample_data.len() as f64 / duration.as_secs_f64();
-    println!("Bloom filter queries: {:.0} items/sec", throughput);
+    println!("Bloom filter queries: {throughput:.0} items/sec");
 }
 
 fn test_simd_performance() {

@@ -1,12 +1,12 @@
 //! Array of Doubles (AOD) Sketch demonstration
 //!
 //! This example showcases the Array of Doubles sketch capabilities:
-//! - Cardinality estimation with associated double values  
+//! - Cardinality estimation with associated double values
 //! - Statistical analysis of multi-dimensional data
 //! - Set operations and sketch merging
 //! - Performance characteristics and memory usage
 
-use sketches::aod::{AodConfig, AodSketch};
+use sketches::aod::AodSketch;
 use std::time::Instant;
 
 fn main() {
@@ -152,7 +152,7 @@ fn performance_demo() {
 
     // Add many items to trigger sampling
     for i in 0..10000 {
-        let key = format!("item_{}", i);
+        let key = format!("item_{i}");
         let metrics = [i as f64, (i * 2) as f64];
         sketch.update(&key, &metrics).unwrap();
     }
@@ -161,7 +161,7 @@ fn performance_demo() {
 
     println!("📈 Performance Results:");
     println!("  Items processed: 10,000");
-    println!("  Processing time: {:.2?}", duration);
+    println!("  Processing time: {duration:.2?}");
     println!(
         "  Items per second: {:.0}",
         10000.0 / duration.as_secs_f64()
@@ -199,7 +199,7 @@ fn analytics_simulation() {
     // Simulate diverse user behavior patterns
     for user_id in 0..5000 {
         let revenue = if user_id % 10 == 0 {
-            rand::random::<f64>() * 500.0 // 10% are buyers 
+            rand::random::<f64>() * 500.0 // 10% are buyers
         } else {
             0.0
         };
@@ -208,9 +208,7 @@ fn analytics_simulation() {
         let time_spent = 30.0 + rand::random::<f64>() * 300.0; // 30-330 seconds
 
         let metrics = [revenue, clicks, conversions, time_spent];
-        sketch
-            .update(&format!("user_{}", user_id), &metrics)
-            .unwrap();
+        sketch.update(&format!("user_{user_id}"), &metrics).unwrap();
     }
 
     let processing_time = start.elapsed();
@@ -218,7 +216,7 @@ fn analytics_simulation() {
     let means = sketch.column_means();
 
     println!("🛒 E-commerce Analytics Dashboard:");
-    println!("  Processing time: {:.2?}", processing_time);
+    println!("  Processing time: {processing_time:.2?}");
     println!("  Unique users: {:.0}", sketch.estimate());
     println!("  Total revenue: ${:.2}", sums[0]);
     println!("  Total clicks: {:.0}", sums[1]);
@@ -243,9 +241,9 @@ fn analytics_simulation() {
     };
 
     println!("💡 Business Insights:");
-    println!("  Overall conversion rate: {:.2}%", conversion_rate);
-    println!("  Revenue per user: ${:.2}", revenue_per_user);
-    println!("  Click-to-conversion rate: {:.3}%", click_to_conversion);
+    println!("  Overall conversion rate: {conversion_rate:.2}%");
+    println!("  Revenue per user: ${revenue_per_user:.2}");
+    println!("  Click-to-conversion rate: {click_to_conversion:.3}%");
 
     // Memory usage estimation
     let memory_usage = sketch.len() * (8 + 8 * sketch.num_values()); // hash + values

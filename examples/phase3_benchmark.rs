@@ -12,9 +12,9 @@ fn main() {
     println!("=== Phase 3 System-Level Optimization Benchmark ===\n");
 
     let num_items = 2_000_000;
-    let test_data: Vec<String> = (0..num_items).map(|i| format!("item_{}", i)).collect();
+    let test_data: Vec<String> = (0..num_items).map(|i| format!("item_{i}")).collect();
 
-    println!("Testing with {} items", num_items);
+    println!("Testing with {num_items} items");
 
     // Test cache optimization
     test_cache_optimization();
@@ -249,17 +249,14 @@ fn test_system_performance(data: &[String]) {
     let estimate = sketch.estimate();
     let error = ((estimate - sample_data.len() as f64) / sample_data.len() as f64 * 100.0).abs();
 
-    println!("System throughput: {:.0} items/sec", throughput);
-    println!("Accuracy: {:.0} estimate ({:.2}% error)", estimate, error);
+    println!("System throughput: {throughput:.0} items/sec");
+    println!("Accuracy: {estimate:.0} estimate ({error:.2}% error)");
     println!("Processing time: {:.2}ms", duration.as_millis());
 
     // Memory efficiency test
     let memory_usage = sketch.to_bytes().len();
     let memory_per_item = memory_usage as f64 / sample_data.len() as f64;
-    println!(
-        "Memory usage: {} bytes ({:.3} bytes/item)",
-        memory_usage, memory_per_item
-    );
+    println!("Memory usage: {memory_usage} bytes ({memory_per_item:.3} bytes/item)");
 }
 
 fn print_phase3_capabilities() {

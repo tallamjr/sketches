@@ -23,7 +23,7 @@ fn main() {
 
         // Add n unique items to both
         for i in 0..n {
-            let item = format!("item_{}", i);
+            let item = format!("item_{i}");
             lc.update(&item);
             hll.update(&item);
         }
@@ -35,8 +35,7 @@ fn main() {
         let hll_error = (hll_estimate - n as f64).abs() / n as f64 * 100.0;
 
         println!(
-            "{:<8} {:<12.1} {:<12.1} {:<12.1}% {:<12.1}%",
-            n, lc_estimate, hll_estimate, lc_error, hll_error
+            "{n:<8} {lc_estimate:<12.1} {hll_estimate:<12.1} {lc_error:<12.1}% {hll_error:<12.1}%"
         );
     }
 
@@ -78,7 +77,7 @@ fn main() {
     for &checkpoint in &checkpoints {
         // Add items up to checkpoint
         while items_added < checkpoint {
-            hybrid.update(&format!("user_{}", items_added));
+            hybrid.update(&format!("user_{items_added}"));
             items_added += 1;
         }
 
@@ -112,7 +111,7 @@ fn main() {
     println!("{}", "-".repeat(25));
 
     let n_items = 100000;
-    println!("Benchmarking with {} items", n_items);
+    println!("Benchmarking with {n_items} items");
 
     // Linear Counter performance
     let start = Instant::now();
@@ -191,7 +190,7 @@ fn main() {
         // Clear and re-add items
         lc_analysis.clear();
         for j in 0..i {
-            lc_analysis.update(&format!("item_{}", j));
+            lc_analysis.update(&format!("item_{j}"));
         }
 
         let stats = lc_analysis.statistics();
@@ -224,17 +223,14 @@ fn main() {
 
         // Add test items
         for i in 0..test_cardinality {
-            lc_size.update(&format!("item_{}", i));
+            lc_size.update(&format!("item_{i}"));
         }
 
         let estimate = lc_size.estimate();
         let error = (estimate - test_cardinality as f64).abs() / test_cardinality as f64 * 100.0;
         let memory_kb = lc_size.statistics().memory_usage as f64 / 1024.0;
 
-        println!(
-            "{:<10} {:<12.1} {:<10.1} {:<10.1}%",
-            bits, memory_kb, estimate, error
-        );
+        println!("{bits:<10} {memory_kb:<12.1} {estimate:<10.1} {error:<10.1}%");
     }
 
     println!("\n{}", "=".repeat(60));
@@ -276,7 +272,7 @@ fn main() {
 
     // Add same data to both
     for i in 0..800 {
-        let item = format!("user_{}", i);
+        let item = format!("user_{i}");
         conservative.update(&item);
         aggressive.update(&item);
     }

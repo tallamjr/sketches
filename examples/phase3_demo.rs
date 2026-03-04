@@ -28,11 +28,11 @@ fn cache_optimization_demo() {
 
     // Sequential access pattern (cache-friendly)
     for i in 0..100_000 {
-        hll.update(&format!("sequential_{}", i));
+        hll.update(&format!("sequential_{i}"));
     }
 
     let sequential_time = start.elapsed();
-    println!("Sequential updates: {:.2?}", sequential_time);
+    println!("Sequential updates: {sequential_time:.2?}");
     println!("Estimate: {:.0}", hll.estimate());
     println!("Cache-aligned data structures improve memory access patterns");
 }
@@ -46,13 +46,13 @@ fn batch_processing_demo() {
     // Individual updates
     let start = Instant::now();
     for i in 0..50_000 {
-        hll.update(&format!("item_{}", i));
+        hll.update(&format!("item_{i}"));
     }
     let individual_time = start.elapsed();
 
     // Batch updates (when optimized feature is enabled)
     let mut hll_batch = HllSketch::new(12);
-    let items: Vec<String> = (0..50_000).map(|i| format!("item_{}", i)).collect();
+    let items: Vec<String> = (0..50_000).map(|i| format!("item_{i}")).collect();
     let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
     let start = Instant::now();
@@ -64,8 +64,8 @@ fn batch_processing_demo() {
     }
     let batch_time = start.elapsed();
 
-    println!("Individual updates: {:.2?}", individual_time);
-    println!("Batch updates: {:.2?}", batch_time);
+    println!("Individual updates: {individual_time:.2?}");
+    println!("Batch updates: {batch_time:.2?}");
 
     #[cfg(feature = "optimized")]
     if individual_time > batch_time {
@@ -97,13 +97,13 @@ fn memory_efficiency_demo() {
 
     // Start in sparse mode
     for i in 0..100 {
-        cpc.update(&format!("sparse_{}", i));
+        cpc.update(&format!("sparse_{i}"));
     }
     println!("After 100 updates - still in sparse mode");
 
     // Trigger mode switch to dense
     for i in 100..2000 {
-        cpc.update(&format!("dense_{}", i));
+        cpc.update(&format!("dense_{i}"));
     }
     println!("After 2000 updates - switched to dense mode");
     println!("CPC estimate: {:.0}", cpc.estimate());
@@ -151,7 +151,7 @@ fn performance_comparison_demo() {
     let bloom_time = start.elapsed();
     let bloom_rate = N as f64 / bloom_time.as_secs_f64();
 
-    println!("Performance Results ({} items):", N);
+    println!("Performance Results ({N} items):");
     println!(
         "├─ HLL:   {:.2?} ({:.0} items/sec) - estimate: {:.0}",
         hll_time,
@@ -170,10 +170,7 @@ fn performance_comparison_demo() {
         cpc_rate,
         cpc.estimate()
     );
-    println!(
-        "└─ Bloom: {:.2?} ({:.0} items/sec) - membership test ready",
-        bloom_time, bloom_rate
-    );
+    println!("└─ Bloom: {bloom_time:.2?} ({bloom_rate:.0} items/sec) - membership test ready");
 
     // Set operations demo
     println!("\nSet Operations:");
@@ -182,10 +179,10 @@ fn performance_comparison_demo() {
 
     // Add overlapping data
     for i in 0..5000 {
-        theta1.update(&format!("set1_{}", i));
+        theta1.update(&format!("set1_{i}"));
     }
     for i in 2500..7500 {
-        theta2.update(&format!("set1_{}", i)); // Reuse set1 prefix for overlap
+        theta2.update(&format!("set1_{i}")); // Reuse set1 prefix for overlap
     }
 
     let union = theta1.union(&theta2);

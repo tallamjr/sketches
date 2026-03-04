@@ -8,7 +8,6 @@ use sketches::hll::HllSketch;
 use sketches::theta::ThetaSketch;
 use std::sync::Once;
 use tracing::{Level, info};
-use tracing_subscriber;
 
 static INIT: Once = Once::new();
 
@@ -78,9 +77,7 @@ fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     // Compare memory: sketch must use less memory than naive set
     assert!(
         sk_mem < naive_mem,
-        "CPC sketch uses {} bytes, which is not less than naive {} bytes",
-        sk_mem,
-        naive_mem
+        "CPC sketch uses {sk_mem} bytes, which is not less than naive {naive_mem} bytes"
     );
     Ok(())
 }
@@ -99,12 +96,7 @@ fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     let est = sk.estimate();
     let rel_err =
         ((est - true_count).abs() / true_count).max((true_count - est).abs() / true_count);
-    assert!(
-        rel_err < 0.05,
-        "HLL err >5%: est {}, true {}",
-        est,
-        true_count
-    );
+    assert!(rel_err < 0.05, "HLL err >5%: est {est}, true {true_count}");
     // Log memory usage: naive vs probabilistic sketch
     let naive_cap = truth.capacity();
     let naive_mem = naive_cap * std::mem::size_of::<String>();
@@ -119,9 +111,7 @@ fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     // Compare memory: sketch must use less memory than naive set
     assert!(
         sk_mem < naive_mem,
-        "HLL sketch uses {} bytes, which is not less than naive {} bytes",
-        sk_mem,
-        naive_mem
+        "HLL sketch uses {sk_mem} bytes, which is not less than naive {naive_mem} bytes"
     );
     Ok(())
 }
@@ -165,9 +155,7 @@ fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
     let err_u = ((est_u - true_u).abs() / true_u).max((true_u - est_u).abs() / true_u);
     assert!(
         err_u < 0.10,
-        "Theta union err >10%: est {}, true {}",
-        est_u,
-        true_u
+        "Theta union err >10%: est {est_u}, true {true_u}"
     );
     // Log memory usage: naive union vs probabilistic union sketch
     let naive_union: HashSet<_> = s1.union(&s2).cloned().collect();
@@ -186,9 +174,7 @@ fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
     // Compare memory: Theta union sketch must use less memory than naive union set
     assert!(
         sk_mem < naive_mem,
-        "Theta union sketch uses {} bytes, which is not less than naive {} bytes",
-        sk_mem,
-        naive_mem
+        "Theta union sketch uses {sk_mem} bytes, which is not less than naive {naive_mem} bytes"
     );
     Ok(())
 }

@@ -8,13 +8,13 @@ where
     let start = Instant::now();
 
     for i in 0..n {
-        update_fn(&format!("element_{}", i));
+        update_fn(&format!("element_{i}"));
     }
 
     let duration = start.elapsed();
     let estimate = 0.0; // Would need to return sketch to get estimate
 
-    println!("{}: {:.2?} for {} updates", name, duration, n);
+    println!("{name}: {duration:.2?} for {n} updates");
 
     (estimate, duration.as_micros())
 }
@@ -25,14 +25,14 @@ fn main() {
     let sizes = vec![1000, 10000, 100000, 1000000];
 
     for &n in &sizes {
-        println!("\nTesting with {} unique elements:", n);
+        println!("\nTesting with {n} unique elements:");
         println!("{}", "-".repeat(50));
 
         // Standard HLL
         let mut hll = HllSketch::new(14);
         let hll_start = Instant::now();
         for i in 0..n {
-            hll.update(&format!("element_{}", i));
+            hll.update(&format!("element_{i}"));
         }
         let hll_duration = hll_start.elapsed();
         let hll_estimate = hll.estimate();
@@ -41,7 +41,7 @@ fn main() {
         let mut hll_pp = HllPlusPlusSketch::new(14);
         let hll_pp_start = Instant::now();
         for i in 0..n {
-            hll_pp.update(&format!("element_{}", i));
+            hll_pp.update(&format!("element_{i}"));
         }
         let hll_pp_duration = hll_pp_start.elapsed();
         let hll_pp_estimate = hll_pp.estimate();
@@ -50,14 +50,14 @@ fn main() {
         let mut hll_pp_sparse = HllPlusPlusSparseSketch::new(14);
         let hll_pp_sparse_start = Instant::now();
         for i in 0..n {
-            hll_pp_sparse.update(&format!("element_{}", i));
+            hll_pp_sparse.update(&format!("element_{i}"));
         }
         let hll_pp_sparse_duration = hll_pp_sparse_start.elapsed();
         let hll_pp_sparse_estimate = hll_pp_sparse.estimate();
 
         // Results
         println!("Standard HLL:");
-        println!("  Time: {:.2?}", hll_duration);
+        println!("  Time: {hll_duration:.2?}");
         println!(
             "  Estimate: {:.0} (error: {:.2}%)",
             hll_estimate,
@@ -65,7 +65,7 @@ fn main() {
         );
 
         println!("HLL++:");
-        println!("  Time: {:.2?}", hll_pp_duration);
+        println!("  Time: {hll_pp_duration:.2?}");
         println!(
             "  Estimate: {:.0} (error: {:.2}%)",
             hll_pp_estimate,
@@ -73,7 +73,7 @@ fn main() {
         );
 
         println!("HLL++ Sparse:");
-        println!("  Time: {:.2?}", hll_pp_sparse_duration);
+        println!("  Time: {hll_pp_sparse_duration:.2?}");
         println!(
             "  Estimate: {:.0} (error: {:.2}%)",
             hll_pp_sparse_estimate,

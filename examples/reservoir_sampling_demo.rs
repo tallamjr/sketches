@@ -9,7 +9,7 @@
 //! - Performance comparisons between algorithms
 
 use sketches::sampling::{
-    ReservoirSamplerA, ReservoirSamplerR, SamplingStats, StreamSampler, WeightedReservoirSampler,
+    ReservoirSamplerA, ReservoirSamplerR, StreamSampler, WeightedReservoirSampler,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -47,7 +47,7 @@ fn basic_algorithm_r_demo() {
     // Simulate a stream of items
     println!("Adding items to stream...");
     for i in 1..=20 {
-        sampler.add(format!("item_{}", i));
+        sampler.add(format!("item_{i}"));
         if i % 5 == 0 {
             println!(
                 "  After {} items: sample = {:?}",
@@ -78,7 +78,7 @@ fn algorithm_a_performance_demo() {
     let start = Instant::now();
     let mut sampler_r = ReservoirSamplerR::new(sample_size);
     for i in 0..stream_size {
-        sampler_r.add(format!("item_{}", i));
+        sampler_r.add(format!("item_{i}"));
     }
     let time_r = start.elapsed();
 
@@ -86,16 +86,13 @@ fn algorithm_a_performance_demo() {
     let start = Instant::now();
     let mut sampler_a = ReservoirSamplerA::new(sample_size);
     for i in 0..stream_size {
-        sampler_a.add(format!("item_{}", i));
+        sampler_a.add(format!("item_{i}"));
     }
     let time_a = start.elapsed();
 
-    println!(
-        "Processing {} items into sample of size {}:",
-        stream_size, sample_size
-    );
-    println!("  Algorithm R: {:?}", time_r);
-    println!("  Algorithm A: {:?}", time_a);
+    println!("Processing {stream_size} items into sample of size {sample_size}:");
+    println!("  Algorithm R: {time_r:?}");
+    println!("  Algorithm A: {time_a:?}");
     println!(
         "  Speedup: {:.2}x",
         time_r.as_nanos() as f64 / time_a.as_nanos() as f64
@@ -132,7 +129,7 @@ fn weighted_sampling_demo() {
 
     for (item, weight) in &weighted_items {
         sampler.add_weighted(item.to_string(), *weight);
-        println!("  Added '{}' with weight {}", item, weight);
+        println!("  Added '{item}' with weight {weight}");
     }
 
     println!("\nSample with weights: {:?}", sampler.sample_with_weights());
@@ -155,7 +152,7 @@ fn weighted_sampling_demo() {
 
     println!("Item selection frequencies:");
     for (item, count) in &item_counts {
-        println!("  {}: {} times", item, count);
+        println!("  {item}: {count} times");
     }
     println!();
 }
@@ -169,7 +166,7 @@ fn stream_processing_demo() {
     println!("Processing stream in batches...");
 
     // Process data in batches
-    let batches = vec![
+    let batches = [
         vec!["user_1", "user_2", "user_3", "user_4"],
         vec!["user_5", "user_6", "user_7"],
         vec!["user_8", "user_9", "user_10", "user_11", "user_12"],
@@ -186,7 +183,7 @@ fn stream_processing_demo() {
     // Flush remaining items
     stream.flush();
     let final_stats = stream.stats();
-    println!("After flush: {}", final_stats);
+    println!("After flush: {final_stats}");
     println!("Final sample: {:?}", stream.sample());
     println!();
 }
@@ -204,19 +201,19 @@ fn distributed_sampling_demo() {
 
     // Node 1 processes data from region A
     for i in 1..=10 {
-        node1.add(format!("region_A_item_{}", i));
+        node1.add(format!("region_A_item_{i}"));
     }
     println!("Node 1 sample: {:?}", node1.sample());
 
     // Node 2 processes data from region B
     for i in 1..=15 {
-        node2.add(format!("region_B_item_{}", i));
+        node2.add(format!("region_B_item_{i}"));
     }
     println!("Node 2 sample: {:?}", node2.sample());
 
     // Node 3 processes data from region C
     for i in 1..=8 {
-        node3.add(format!("region_C_item_{}", i));
+        node3.add(format!("region_C_item_{i}"));
     }
     println!("Node 3 sample: {:?}", node3.sample());
 
@@ -247,8 +244,7 @@ fn statistical_validation_demo() {
     let mut selection_counts = vec![0; population_size];
 
     println!(
-        "Running {} trials with population of {} items, sample size {}...",
-        trials, population_size, sample_size
+        "Running {trials} trials with population of {population_size} items, sample size {sample_size}..."
     );
 
     for _ in 0..trials {
@@ -269,15 +265,12 @@ fn statistical_validation_demo() {
 
     // Expected count for each item
     let expected_count = trials * sample_size / population_size;
-    println!("Expected selection count per item: {}", expected_count);
+    println!("Expected selection count per item: {expected_count}");
 
     println!("Actual selection counts:");
     for (item, count) in selection_counts.iter().enumerate() {
         let deviation = (*count as f64 - expected_count as f64) / expected_count as f64 * 100.0;
-        println!(
-            "  Item {}: {} times ({:+.1}% from expected)",
-            item, count, deviation
-        );
+        println!("  Item {item}: {count} times ({deviation:+.1}% from expected)");
     }
 
     // Statistical test: chi-squared goodness of fit
@@ -289,7 +282,7 @@ fn statistical_validation_demo() {
         })
         .sum();
 
-    println!("Chi-squared statistic: {:.2}", chi_squared);
+    println!("Chi-squared statistic: {chi_squared:.2}");
 
     // For 9 degrees of freedom, critical value at 95% confidence is ~16.92
     if chi_squared < 16.92 {
