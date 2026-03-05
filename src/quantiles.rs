@@ -1,3 +1,25 @@
+//! KLL (Karnin-Lang-Liberty) Sketch for quantile estimation.
+//!
+//! The KLL sketch is a streaming quantile algorithm that maintains items across
+//! multiple compaction levels. It is provably optimal among comparison-based
+//! streaming quantile algorithms.
+//!
+//! # Error Bounds
+//! - Normalised rank error: `~1.65 / sqrt(k)` at default k=200.
+//! - Space complexity: `O(k * log(n/k))` items across all levels.
+//!
+//! # When to Use KLL vs T-Digest
+//! - KLL has mathematically proven error bounds; T-Digest bounds are empirical.
+//! - T-Digest excels at extreme quantiles (p99, p99.9); KLL is more uniform.
+//! - KLL supports exact merging; T-Digest merge is approximate.
+//!
+//! # Common Uses
+//! Database query planning, histogram construction, distribution monitoring.
+//!
+//! # References
+//! - Karnin, Lang, Liberty. "Optimal Quantile Approximation in Streams."
+//!   FOCS, 2016.
+
 use std::cmp::Ordering;
 
 /// KLL (Karnin-Lang-Liberty) Sketch for quantile estimation.
@@ -10,6 +32,19 @@ use std::cmp::Ordering;
 /// items. When a level overflows its capacity, it is compacted: sorted, then every
 /// other item (alternating between even and odd indexed, chosen pseudorandomly) is
 /// promoted to the next level. Items at level h represent 2^h original items.
+///
+///
+/// # Error Bounds
+/// - Normalised rank error: `~1.65 / sqrt(k)` at default k=200.
+/// - Space complexity: O(k * log(n/k)) items across all levels.
+/// - Provably optimal among comparison-based streaming quantile algorithms.
+///
+/// # Common Uses
+/// Database query planning, histogram construction, distribution monitoring.
+///
+/// # References
+/// - Karnin, Lang, Liberty. "Optimal Quantile Approximation in Streams."
+///   FOCS, 2016.
 ///
 /// Capacities grow geometrically from bottom to top: higher levels have larger
 /// capacities because their items are more valuable (each represents more original

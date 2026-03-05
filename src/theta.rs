@@ -1,3 +1,29 @@
+//! Theta Sketch for set cardinality estimation and set operations.
+//!
+//! The Theta Sketch maintains a sample of hash values below a threshold theta.
+//! As more items are added, theta shrinks to keep at most k samples. This enables
+//! set operations (union, intersection, difference) by combining samples and
+//! adjusting theta, which is not possible with HLL.
+//!
+//! # When to Use Theta vs HLL
+//! - Use HLL when you only need cardinality (more memory-efficient).
+//! - Use Theta when you need set operations (union, intersection, A-not-B).
+//!
+//! # Error Bounds
+//! - Relative standard error: `~1 / sqrt(k)` where k is the nominal sample size.
+//! - k=4096 (default): ~1.6% error, same as HLL with p=12.
+//!
+//! # Implementation
+//! Uses an open-addressing hash table with stride-based probing for O(1) amortised
+//! duplicate detection, matching the Apache DataSketches design.
+//!
+//! # Common Uses
+//! Audience overlap analysis, A/B test set intersections, deduplication across partitions.
+//!
+//! # References
+//! - Dasgupta, Lang, Rhodes, Thaler. "A Framework for Estimating Stream Expression
+//!   Cardinalities." ICDE, 2016.
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

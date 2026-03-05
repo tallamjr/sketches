@@ -1,3 +1,27 @@
+//! Bloom Filter and Counting Bloom Filter for approximate membership testing.
+//!
+//! A Bloom filter is a space-efficient probabilistic data structure that tests
+//! whether an element is a member of a set. False positives are possible but
+//! false negatives are not -- if the filter says "not present", the element is
+//! definitely absent.
+//!
+//! # Error Bounds
+//! - False positive probability: `P_fp ~= (1 - e^(-kn/m))^k`
+//! - Optimal bits per element: `m/n = -ln(P_fp) / (ln(2))^2`
+//! - Optimal hash count: `k = (m/n) * ln(2)`
+//! - Example: 1M elements, 1% FP rate -> ~9.6 bits/element, k=7
+//!
+//! # Counting Bloom Filter
+//! Replaces single bits with counters, enabling deletion at the cost of
+//! ~4x more memory. Counter overflow is handled with saturation.
+//!
+//! # Common Uses
+//! Web caches, spell checkers, database key lookups, network routing tables.
+//!
+//! # References
+//! - Bloom, B. H. "Space/Time Trade-offs in Hash Coding with Allowable Errors."
+//!   Communications of the ACM, 1970.
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

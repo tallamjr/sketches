@@ -1,3 +1,29 @@
+//! Count-Min Sketch and Count Sketch for frequency estimation.
+//!
+//! The Count-Min Sketch uses a 2D array of counters (depth x width) with
+//! independent hash functions per row. Frequency is estimated by taking the
+//! minimum across all rows, providing a conservative (always-overestimate) bound.
+//!
+//! # Error Bounds (Count-Min)
+//! - Estimate error <= epsilon * N with probability >= 1 - delta
+//! - Width: `w = ceil(e / epsilon)` (~2.718 / epsilon)
+//! - Depth: `d = ceil(ln(1 / delta))`
+//! - Example: epsilon=0.001, delta=0.01 -> w=2719, d=5
+//!
+//! # Count Sketch
+//! Uses signed (+1/-1) counters and takes the median across rows.
+//! Provides unbiased estimates (can under- or overestimate) but requires
+//! more space than Count-Min for the same accuracy.
+//!
+//! # Common Uses
+//! Network traffic monitoring, NLP word frequency, database query optimisation.
+//!
+//! # References
+//! - Cormode, Muthukrishnan. "An Improved Data Stream Summary: The Count-Min
+//!   Sketch and its Applications." Journal of Algorithms, 2005.
+//! - Charikar, Chen, Farach-Colton. "Finding Frequent Items in Data Streams."
+//!   Theoretical Computer Science, 2004.
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

@@ -1,4 +1,20 @@
-//! Primary library module for sketches crate; provides Python bindings.
+//! # Sketches -- High-Performance Probabilistic Data Structures
+//!
+//! This crate provides streaming-friendly, memory-efficient probabilistic data
+//! structures for five core problem domains:
+//!
+//! | Domain | Modules | Key Question |
+//! |--------|---------|--------------|
+//! | **Membership** | [`bloom`] | "Is X in the set?" |
+//! | **Cardinality** | [`hll`], [`cpc`], [`linear`], [`theta`] | "How many unique items?" |
+//! | **Frequency** | [`countmin`], [`frequent`] | "What are the most common items?" |
+//! | **Quantiles** | [`tdigest`], [`quantiles`], [`req`] | "What is the p99 value?" |
+//! | **Sampling** | [`sampling`], [`varopt`] | "Give me a random subset" |
+//!
+//! All sketches share common properties: fixed memory independent of stream size,
+//! single-pass processing, and composability (most support merging for distributed use).
+//!
+//! Rust library (`rlib`) with optional Python bindings via PyO3 (`cdylib`).
 
 // Performance optimization setup
 #[cfg(feature = "optimized")]

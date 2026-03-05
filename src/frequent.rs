@@ -1,3 +1,18 @@
+//! Frequent Items (Heavy Hitters) sketch for finding the most common elements in a stream.
+//!
+//! # Error Bounds
+//! - Deterministic guarantee: `(upper_bound - lower_bound) <= total_weight * epsilon`
+//!   where `epsilon = 3.5 / max_map_size`.
+//! - No false negatives when using `ErrorType::NoFalseNegatives`.
+//!
+//! # Common Uses
+//! Top-K heavy hitters, trending topic detection, network flow analysis.
+//!
+//! # References
+//! - Misra, Gries. "Finding Repeated Elements." Science of Computer Programming, 1982.
+//! - Metwally, Agrawal, El Abbadi. "Efficient Computation of Frequent and Top-k
+//!   Elements in Data Streams." ICDT, 2005.
+
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;

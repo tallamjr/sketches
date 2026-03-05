@@ -1,3 +1,18 @@
+//! Linear Counter for small cardinality estimation.
+//!
+//! # Error Bounds
+//! - Estimate formula: `n_hat = -m * ln(Z/m)` where Z is the count of zero bits.
+//! - Standard error depends on load factor `alpha = n/m`.
+//! - Accurate when `n < 5m`; beyond this, transition to HLL.
+//!
+//! # When to Use
+//! - Use LinearCounter for small cardinalities (n < 1000).
+//! - Use HybridCounter to auto-transition from Linear to HLL as cardinality grows.
+//!
+//! # References
+//! - Whang, Vander-Zanden, Taylor. "A Linear-Time Probabilistic Counting Algorithm
+//!   for Database Applications." ACM TODS, 1990.
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

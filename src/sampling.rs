@@ -2,6 +2,29 @@
 //!
 //! This module implements various reservoir sampling algorithms for maintaining
 //! a random sample from a stream of data.
+//!
+//! Reservoir sampling maintains a uniform random sample of k items from a stream
+//! of unknown length n. Every element has an equal probability k/n of being in the
+//! final sample, regardless of arrival order.
+//!
+//! # Algorithms
+//! - **Algorithm R**: Simple replacement-based. O(1) per item but generates a random
+//!   number for every item after the reservoir fills.
+//! - **Algorithm A** (Vitter): Skips items probabilistically, ~19x faster for large n.
+//! - **A-Res** (Weighted): Assigns priority `u^(1/w)` per item for probability-
+//!   proportional-to-weight sampling. O(log k) per item.
+//!
+//! # Guarantees
+//! - Uniform distribution: each of the n items has exactly k/n probability of inclusion.
+//! - Single-pass: processes the stream in one pass with O(k) memory.
+//!
+//! # Common Uses
+//! A/B test sampling, audit trail selection, approximate query processing.
+//!
+//! # References
+//! - Vitter, J. S. "Random Sampling with a Reservoir." ACM TOMS, 1985.
+//! - Efraimidis, Spirakis. "Weighted Random Sampling with a Reservoir."
+//!   Information Processing Letters, 2006.
 
 use rand::prelude::*;
 use rand::rngs::ThreadRng;

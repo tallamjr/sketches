@@ -7,6 +7,18 @@
 //! The merge operation uses proper centroid merging via the underlying tdigest crate's
 //! `merge_digests` method, preserving centroid information and maintaining accuracy
 //! across successive merges.
+//!
+//! # When to Use T-Digest vs KLL
+//! - T-Digest excels at extreme quantiles (p99, p99.9) due to adaptive centroid compression.
+//! - KLL has provable error bounds (~1.65% at k=200) but is less accurate at extremes.
+//! - T-Digest bounds are empirical; KLL bounds are mathematically proven.
+//!
+//! # Common Uses
+//! Latency percentile monitoring (p95/p99), anomaly detection, SLA compliance.
+//!
+//! # References
+//! - Dunning, T. "Computing Extremely Accurate Quantiles Using t-Digests." 2019.
+//!   https://arxiv.org/abs/1902.04023
 
 use std::fmt;
 use tdigest::TDigest as CoreTDigest;

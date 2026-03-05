@@ -6,6 +6,17 @@
 //!
 //! Reference: Kevin Lang, "Back to the Future: an Even More Nearly Optimal
 //! Cardinality Estimation Algorithm" (2017)
+//!
+//! # Error Bounds
+//! - Comparable accuracy to HLL but ~40% smaller serialised size.
+//! - Standard error: approximately `1.0 / sqrt(2^lg_k)`.
+//!
+//! # When to Use CPC vs HLL
+//! - Use CPC when network transfer cost or storage size is the primary concern.
+//! - Use HLL when simplicity and merge performance matter more.
+//!
+//! # Common Uses
+//! Distributed cardinality estimation where sketch serialisation size is critical.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

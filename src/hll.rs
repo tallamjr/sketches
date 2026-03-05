@@ -1,4 +1,24 @@
-// HyperLogLog (HLL) and HyperLogLog++ implementations.
+//! HyperLogLog (HLL) and HyperLogLog++ (HLL++) for approximate distinct counting.
+//!
+//! HLL uses a fixed array of `m = 2^p` registers to estimate stream cardinality
+//! by tracking the maximum observed rank (leading zeros + 1) per register bucket.
+//! The estimate uses a bias-corrected harmonic mean across all registers.
+//!
+//! # Error Bounds
+//! - Standard error: `delta ~= 1.04 / sqrt(m)` where `m = 2^p`
+//! - p=12 (default): 4096 registers, ~3 KB, ~1.6% error
+//! - p=14: 16384 registers, ~16 KB, ~0.8% error
+//!
+//! # HLL++ Enhancements
+//! - 64-bit hashing to reduce large-cardinality collisions
+//! - Sparse representation for memory efficiency at low cardinalities
+//! - Empirical bias correction from Heule et al.
+//!
+//! # References
+//! - Flajolet, Fusy, Gandouet, Meunier. "HyperLogLog: the analysis of a near-optimal
+//!   cardinality estimation algorithm." DMTCS, 2007.
+//! - Heule, Nunkesser, Hall. "HyperLogLog in Practice: Algorithmic Engineering of a
+//!   State of the Art Cardinality Estimation Algorithm." EDBT, 2013.
 
 #[cfg(not(feature = "optimized"))]
 use std::collections::BTreeMap;
