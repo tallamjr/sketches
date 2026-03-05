@@ -1,4 +1,4 @@
-# 🎯 `sketches` - High-Performance Probabilistic Data Structures
+# sketches -- High-Performance Probabilistic Data Structures
 
 [![Rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
@@ -8,185 +8,53 @@
 
 Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservoir Sampling, and more via PyO3.
 
-> [!Note]
->
-> This project layout is inspired by the Polars project. A high-performance exploration of probabilistic data structures
-> using performant Rust with a Python-friendly interface. Built for production use with comprehensive algorithm implementations.
->
-> 📖 **[Deep Algorithm Comparison →](ALGORITHMS.md)**
+**[Algorithm Deep Dive](ALGORITHMS.md)**
 
 ## Features
 
-| **Algorithm Category**     | **Implementation** | **Description**                                               | **Status** | **Mergeable** |
-| -------------------------- | ------------------ | ------------------------------------------------------------- | ---------- | ------------- |
-| **Cardinality Estimation** | HyperLogLog (HLL)  | Industry-standard distinct counting with ~1% error            | ✅         | Yes           |
-|                            | HyperLogLog++      | Enhanced HLL with bias correction and sparse mode             | ✅         | Yes           |
-|                            | CPC Sketch         | Most compact serialization for network transfer               | ✅         | Yes           |
-|                            | Linear Counter     | Optimal for small cardinalities (n < 1000)                    | ✅         | No            |
-|                            | Hybrid Counter     | Auto-transitions from Linear → HLL                            | ✅         | No            |
-| **Set Operations**         | Theta Sketch       | Union, intersection, difference with cardinality estimation   | ✅         | Yes           |
-| **Sampling**               | Algorithm R        | Basic reservoir sampling for uniform random samples           | ✅         | Yes           |
-|                            | Algorithm A        | Optimized reservoir sampling (19x faster for large streams)   | ✅         | Yes           |
-|                            | Weighted Sampling  | Probability-proportional reservoir sampling                   | ✅         | Yes           |
-|                            | Stream Sampling    | High-throughput sampling with batching                        | ✅         | No            |
-| **Quantile Estimation**    | T-Digest           | Superior accuracy for extreme quantiles (p95, p99)            | ✅         | Yes           |
-|                            | KLL Sketch         | Simplified implementation (~20-30% error bounds)              | ✅         | Yes           |
-| **Frequency Estimation**   | Count-Min Sketch   | Conservative frequency estimation with ε-δ guarantees         | ✅         | Yes           |
-|                            | Count Sketch       | Unbiased frequency estimation using median                    | ✅         | Yes           |
-|                            | Frequent Items     | Top-K heavy hitters with Space-Saving algorithm               | ✅         | Yes           |
-| **Membership Testing**     | Bloom Filter       | Fast membership testing with configurable false positive rate | ✅         | Yes           |
-|                            | Counting Bloom     | Bloom filter with deletion support                            | ✅         | Yes           |
-| **Multi-dimensional**      | Array of Doubles   | Tuple sketch for multi-dimensional aggregation                | ✅         | Yes           |
+| **Algorithm Category**     | **Implementation** | **Description**                                                 | **Status** | **Mergeable** |
+| -------------------------- | ------------------ | --------------------------------------------------------------- | ---------- | ------------- |
+| **Cardinality Estimation** | HyperLogLog (HLL)  | Industry-standard distinct counting with ~1% error              | Yes        | Yes           |
+|                            | HyperLogLog++      | Enhanced HLL with bias correction and sparse mode               | Yes        | Yes           |
+|                            | CPC Sketch         | Most compact serialisation for network transfer                 | Yes        | Yes           |
+|                            | Linear Counter     | Optimal for small cardinalities (n < 1000)                      | Yes        | No            |
+|                            | Hybrid Counter     | Auto-transitions from Linear to HLL                             | Yes        | No            |
+| **Set Operations**         | Theta Sketch       | Union, intersection, difference with cardinality estimation     | Yes        | Yes           |
+| **Sampling**               | Algorithm R        | Basic reservoir sampling for uniform random samples             | Yes        | Yes           |
+|                            | Algorithm A        | Optimised reservoir sampling (19x faster for large streams)     | Yes        | Yes           |
+|                            | Weighted Sampling  | Probability-proportional reservoir sampling                     | Yes        | Yes           |
+|                            | Stream Sampling    | High-throughput sampling with batching                          | Yes        | No            |
+| **Quantile Estimation**    | T-Digest           | Superior accuracy for extreme quantiles (p95, p99)              | Yes        | Yes           |
+|                            | KLL Sketch         | Provable error bounds (~1.65% at k=200)                         | Yes        | Yes           |
+| **Frequency Estimation**   | Count-Min Sketch   | Conservative frequency estimation with epsilon-delta guarantees | Yes        | Yes           |
+|                            | Count Sketch       | Unbiased frequency estimation using median                      | Yes        | Yes           |
+|                            | Frequent Items     | Top-K heavy hitters with Space-Saving algorithm                 | Yes        | Yes           |
+| **Membership Testing**     | Bloom Filter       | Fast membership testing with configurable false positive rate   | Yes        | Yes           |
+|                            | Counting Bloom     | Bloom filter with deletion support                              | Yes        | Yes           |
+| **Multi-dimensional**      | Array of Doubles   | Tuple sketch for multi-dimensional aggregation                  | Yes        | Yes           |
 
 **Mergeable** means two independently built sketches can be combined into one that represents the union of both input streams, without access to the original data. This is essential for distributed systems where data is partitioned across nodes -- each node builds a local sketch, then all sketches are merged into a single result.
-
-## 🚀 Performance Benchmarks
-
-**Rigorous comparison against Apache DataSketches (industry standard)**
-
-We conducted comprehensive benchmarks comparing our Rust-based implementation with the official Apache DataSketches Python library across key performance metrics:
-
-### Processing Throughput
-
-```
-HyperLogLog Updates (2M items):
-┌─────────────────────┬──────────────┬─────────────────┬──────────┐
-│ Implementation      │ Time         │ Throughput      │ Ratio    │
-├─────────────────────┼──────────────┼─────────────────┼──────────┤
-│ Apache DataSketches │ 0.29s        │ 7.1M items/sec │ 5.2x     │
-│ Our Library         │ 1.51s        │ 1.3M items/sec │ baseline │
-└─────────────────────┴──────────────┴─────────────────┴──────────┘
-```
-
-### Memory Efficiency
-
-```
-HyperLogLog Memory Usage (1M items):
-┌─────────────────────┬──────────────┬─────────────────┐
-│ Implementation      │ Memory Usage │ Efficiency      │
-├─────────────────────┼──────────────┼─────────────────┤
-│ Apache DataSketches │ 32 KB        │ 9x better       │
-│ Our Library         │ 288 KB       │ baseline        │
-└─────────────────────┴──────────────┴─────────────────┘
-```
-
-### Accuracy Comparison
-
-```
-HyperLogLog Error Rates:
-┌──────────────┬─────────────┬─────────────┬──────────┐
-│ Dataset Size │ Our Error   │ Apache Error│ Winner   │
-├──────────────┼─────────────┼─────────────┼──────────┤
-│ 1,000        │ 0.22%       │ 0.72%       │ Ours ✅   │
-│ 10,000       │ 2.48%       │ 0.72%       │ Apache   │
-│ 100,000      │ 1.27%       │ 1.23%       │ Tie      │
-│ 1,000,000    │ 1.77%       │ 1.14%       │ Apache   │
-└──────────────┴─────────────┴─────────────┴──────────┘
-```
-
-### Key Insights
-
-**🎯 Accuracy**: Both libraries achieve excellent <3% error rates
-**⚡ Speed**: Apache DataSketches is 5x faster (optimized C++ core)
-**💾 Memory**: Apache DataSketches uses 9x less memory
-**🔧 Features**: Our library provides 2x more algorithms (18 vs 9)
-**🛡️ Safety**: Rust guarantees memory safety and eliminates entire bug classes
-
-### When to Use Each
-
-**Choose Our Library For:**
-
-- **Algorithm diversity** - sampling, frequency estimation, specialized sketches
-- **Rich analytics** - confidence bounds, statistics, merging operations
-- **Memory safety** - Rust eliminates segfaults and memory leaks
-- **Modern development** - excellent type safety and error messages
-
-**Choose Apache DataSketches For:**
-
-- **Maximum performance** - 5x faster processing
-- **Memory constraints** - 9x lower memory usage
-- **Production scale** - billions of items daily
-- **Enterprise deployment** - proven stability
-
-## 🚀 Optimization Roadmap
-
-**Current Status:** Apache DataSketches leads with 5x throughput and 9x memory efficiency
-**Target:** Match or exceed Apache DataSketches performance across all metrics
-
-### Phase 1: Memory Optimization (Target: 85% reduction)
-
-- **Sparse Mode**: HashMap storage for <1K items → 90% memory reduction
-- **Bit-Packed Storage**: 6-bit registers instead of 8-bit → 25% reduction
-- **Custom Allocators**: jemalloc and object pooling → 15% performance boost
-
-### Phase 2: SIMD Implementation (Target: 300% throughput)
-
-- **AVX2/NEON Vectorization**: Process 8 items simultaneously
-- **Vectorized Estimation**: Parallel 2^(-rho) computation
-- **SIMD Hash Functions**: Batch string processing
-
-### Phase 3: Algorithm Optimizations (Target: 20% improvement)
-
-- **HLL++ Bias Correction**: Pre-computed correction tables
-- **Branch-Free Operations**: Eliminate conditionals in hot paths
-- **Cache Optimization**: Aligned data structures and prefetching
-
-**Performance Targets:**
-
-- Throughput: 15-25M items/sec (2-3x faster than Apache DataSketches)
-- Memory: 25-30KB (90% reduction, matching Apache DataSketches)
-- Accuracy: <1% error consistently
-
-Both libraries excel at their core mission: enabling approximate analytics on massive datasets with bounded memory and excellent accuracy.
-
-## 📊 TPC-H Business Intelligence Benchmarks
-
-**Real-world performance analysis with 6M+ business records**
-
-We provide comprehensive benchmarking against actual TPC-H business data to demonstrate realistic performance characteristics:
-
-```bash
-# Run the TPC-H performance analysis notebook
-pytest --nbmake examples/tpch_performance_analysis.ipynb
-```
-
-**Key Business Intelligence Queries Tested:**
-
-- **Distinct customers placing orders** (1.5M records)
-- **Unique parts sold** (50K lineitem records)
-- **Orders with line items** (distinct order counting)
-
-**Performance Highlights with Real Data:**
-
-- **Sub-5% error rates** on critical business metrics
-- **1000x+ memory efficiency** vs traditional exact counting
-- **Millions of items/sec throughput** for streaming analytics
-- **Scalability analysis** from 1K to 50K+ items
-
-> 📈 **[Interactive TPC-H Analysis →](examples/tpch_performance_analysis.ipynb)**
-
-The notebook demonstrates practical business value including distinct counting for customer analytics, inventory management, and order processing with realistic error bounds and performance characteristics.
 
 ## Table of Contents
 
 <!-- mtoc-start -->
 
+- [Choosing the Right Sketch](#choosing-the-right-sketch)
 - [Background: Probabilistic Data Structures](#background-probabilistic-data-structures)
   - [The Cardinality Conundrum](#the-cardinality-conundrum)
-  - [Database Superpowers: Query Planning & `GROUP BY` Operations](#database-superpowers-query-planning--group-by-operations)
+  - [Database Superpowers: Query Planning and GROUP BY Operations](#database-superpowers-query-planning-and-group-by-operations)
   - [How HLL Works at a Glance](#how-hll-works-at-a-glance)
-  - [Implications & the Big Picture](#implications--the-big-picture)
-- [Choosing the Right Sketch](#choosing-the-right-sketch)
+  - [Implications and the Big Picture](#implications-and-the-big-picture)
 - [Memory Usage Comparison](#memory-usage-comparison)
 - [Package Installation](#package-installation)
   - [Prerequisites](#prerequisites)
-  - [From PyPI (if available)](#from-pypi-if-available)
+  - [From PyPI](#from-pypi)
   - [From Source](#from-source)
 - [Getting Started](#getting-started)
   - [Quick Installation](#quick-installation)
   - [Development Workflow](#development-workflow)
 - [Library Usage](#library-usage)
-  - [🎯 Business Intelligence Examples](#-business-intelligence-examples)
+  - [Business Intelligence Examples](#business-intelligence-examples)
   - [HLL Sketch Example](#hll-sketch-example)
     - [Minimal Test with Polars](#minimal-test-with-polars)
   - [CPC Sketch Example](#cpc-sketch-example)
@@ -195,94 +63,24 @@ The notebook demonstrates practical business value including distinct counting f
   - [Frequency Estimation Example](#frequency-estimation-example)
   - [Quantile Estimation Example](#quantile-estimation-example)
   - [Sampling Example](#sampling-example)
-  - [Linear & Hybrid Counter Example](#linear--hybrid-counter-example)
+  - [Linear and Hybrid Counter Example](#linear-and-hybrid-counter-example)
   - [Array of Doubles (AOD) Sketch Example](#array-of-doubles-aod-sketch-example)
 - [Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation](#extending-hll-sparse-buffer-variable-length-encoding-and-hybrid-representation)
   - [Theta Sketch Example](#theta-sketch-example)
     - [Minimal Test with Polars](#minimal-test-with-polars-2)
-- [Roadmap & Missing Features](#roadmap--missing-features)
+- [Performance](#performance)
+  - [Processing Throughput](#processing-throughput)
+  - [Memory Efficiency](#memory-efficiency)
+  - [Accuracy Comparison](#accuracy-comparison)
+  - [Summary](#summary)
+  - [When to Use Each](#when-to-use-each)
+- [TPC-H Business Intelligence Benchmarks](#tpc-h-business-intelligence-benchmarks)
+- [Roadmap and Missing Features](#roadmap-and-missing-features)
   - [Not Yet Implemented](#not-yet-implemented)
   - [Current Development Priorities](#current-development-priorities)
 - [License](#license)
 
 <!-- mtoc-end -->
-
-## Background: Probabilistic Data Structures
-
-Probabilistic data structures such as HyperLogLog (HLL), Compressed Counting (CPC)
-sketches, and Theta sketches provide approximate answers (e.g., cardinality
-estimates) while using significantly less memory compared to exact methods.
-
-For example, to count the number of unique elements in a dataset of millions of
-items, a conventional approach (e.g., using a hash set or a DataFrame’s unique
-operation) must store every unique value in memory, resulting in $O(N)$ space.
-
-In contrast, an HLL sketch uses a fixed-size array of registers ($2^k$ registers,
-each a few bits), requiring only $O(2^k)$ space, independent of $N$. With $k = 12$
-(the default in this library), HLL needs just 4096 registers (≈3 KB of memory)
-yet can estimate cardinalities of millions of items with only a few percent error.
-
-### The Cardinality Conundrum
-
-Imagine you’re the DBA for a high-traffic website tracking unique visitors (by IP)
-every month. If 1.44 billion visits happen with an average of 10 pages each, that’s
-~12 billion rows of IPs. Checking uniqueness exactly (sorting or hashing all) would
-gobble up hundreds of gigabytes of RAM and take ages—yet we only need an estimate.
-
-Enter **HyperLogLog**. It treats the input as a _stream_ of hashed values and
-records only a tiny **"sketch"** of the data. By observing _leading-zero patterns_
-in those hash values (a rare long run of zeros suggests many distinct inputs),
-HLL collects these patterns across many "buckets" and applies a Harmonic-Mean
-formula (with bias correction) to deliver an approximate count.
-
-Why is this so cool? It uses a tiny amount of memory (e.g., 12 KB for 4096
-counters) and still achieves ~1\% error! I know, awesome right?!
-
-HLL excels when you need a fast, memory-frugal answer and can tolerate a small
-error (e.g., ±2%). It’s _much_ cheaper than exact counting at Big Data scales,
-and many systems
-([Trino](https://trino.io/docs/current/functions/hyperloglog.html), [Redis’s
-`PFCOUNT`](https://redis.io/docs/latest/develop/data-types/probabilistic/hyperloglogs/),
-[PostgreSQL’s
-`hyperloglog`](https://github.com/postgres/postgres/blob/master/src/backend/lib/hyperloglog.c)
-extension) bake HLL directly into their engines.
-
-### Database Superpowers: Query Planning & `GROUP BY` Operations
-
-Approximate distinct counts guide query planners to choose efficient execution
-strategies. For example, most SQL engines must decide between a hash-based
-aggregation (fast but memory heavy) and a pipelined sort/group (low memory but
-requires sorted input). A wrong guess by orders of magnitude wastes resources.
-
-By feeding HLL-based estimates (e.g., "This group has ~10 million unique values")
-into the optimiser, systems like [Vertica](https://en.wikipedia.org/wiki/Vertica), PostgreSQL, and Snowflake select
-better plans and avoid costly spills to disk or full-table scans.
-
-### How HLL Works at a Glance
-
-1. Hash each input to a `32-bit` value.
-2. Use the first $p$ bits to select one of $2^p$ registers.
-3. Count leading zeros in the remaining bits (plus one) as the "rank".
-4. Store the maximum rank per register.
-5. Estimate cardinality via a bias-corrected harmonic mean across registers.
-
-This was taken further by [Stefan Heule et. al](https://research.google/pubs/hyperloglog-in-practice-algorithmic-engineering-of-a-state-of-the-art-cardinality-estimation-algorithm/)
-who introduced the HyperLogLog++ algorithm.
-
-HLL++ refines the original algorithm with:
-
-- **64-bit hashes** to reduce collisions at massive scales.
-- **Improved bias correction** for small cardinalities (linear counting switch).
-- **Sparse representation** for compact storage when few registers are non-zero.
-
-This yields higher accuracy (error ∼0.5%) and graceful scaling from tiny to
-trillion-element workloads.
-
-### Implications & the Big Picture
-
-HyperLogLog sketches let Big Data systems _reason about size cheaply_ and one
-can sketch data, merge across partitions, and get fast, memory-efficient
-distinct counts—trading a dash of accuracy for massive speed and scale.
 
 ## Choosing the Right Sketch
 
@@ -297,7 +95,7 @@ Different problems call for different sketches. Use this guide to pick the right
 | **Frequency**             | "What are the top-K items?"                  | `FrequentStringsSketch`       | `CountMinSketch` / `CountSketch`            | Yes -- entry-wise addition          |
 | **Quantiles**             | "What's the p99 latency?"                    | `KllSketch` (provable bounds) | `TDigest` (extreme quantile accuracy)       | Yes -- digest merging               |
 | **Sampling**              | "Give me a random subset"                    | `ReservoirSamplerR`           | `ReservoirSamplerA` (19x faster)            | Partial -- merge samplers           |
-| **Weighted Sampling**     | "Sample proportional to weight"              | `WeightedReservoirSampler`    | `VarOptSampler` (Horvitz-Thompson)          | Yes -- VarOpt merge                 |
+| **Weighted Sampling**     | "Sample proportional to weight"              | `WeightedReservoirSampler`    | `VarOptSketch` (Horvitz-Thompson)           | Yes -- VarOpt merge                 |
 | **Multi-dimensional**     | "Aggregate multiple metrics per key"         | `AodSketch`                   | `AodSketch`                                 | Yes -- summary merging              |
 
 **Key trade-offs:**
@@ -307,6 +105,82 @@ Different problems call for different sketches. Use this guide to pick the right
 - **Count-Min vs Count Sketch**: Count-Min always overestimates (conservative). Count Sketch is unbiased but uses more space.
 - **KLL vs T-Digest**: KLL has provable error bounds (~1.65% at k=200). T-Digest excels at extreme quantiles (p99, p99.9) but bounds are empirical.
 - **Algorithm R vs A**: Both produce uniform samples. Algorithm A skips items probabilistically, making it ~19x faster for large streams.
+
+## Background: Probabilistic Data Structures
+
+Probabilistic data structures such as HyperLogLog (HLL), Compressed Counting (CPC)
+sketches, and Theta sketches provide approximate answers (e.g., cardinality
+estimates) while using significantly less memory compared to exact methods.
+
+For example, to count the number of unique elements in a dataset of millions of
+items, a conventional approach (e.g., using a hash set or a DataFrame's unique
+operation) must store every unique value in memory, resulting in $O(N)$ space.
+
+In contrast, an HLL sketch uses a fixed-size array of registers ($2^k$ registers,
+each a few bits), requiring only $O(2^k)$ space, independent of $N$. With $k = 12$
+(the default in this library), HLL needs just 4096 registers (approx. 3 KB of memory)
+yet can estimate cardinalities of millions of items with only a few percent error.
+
+### The Cardinality Conundrum
+
+Imagine you are the DBA for a high-traffic website tracking unique visitors (by IP)
+every month. If 1.44 billion visits happen with an average of 10 pages each, that is
+~12 billion rows of IPs. Checking uniqueness exactly (sorting or hashing all) would
+consume hundreds of gigabytes of RAM and take an impractical amount of time -- yet we
+only need an estimate.
+
+**HyperLogLog** treats the input as a _stream_ of hashed values and records only a
+tiny **"sketch"** of the data. By observing _leading-zero patterns_ in those hash
+values (a rare long run of zeros suggests many distinct inputs), HLL collects these
+patterns across many "buckets" and applies a Harmonic-Mean formula (with bias
+correction) to deliver an approximate count.
+
+HLL uses a tiny amount of memory (e.g., 12 KB for 4096 counters) and still achieves
+~1% error. It excels when you need a fast, memory-frugal answer and can tolerate a
+small error (e.g., +/-2%). It is _much_ cheaper than exact counting at Big Data
+scales, and many systems
+([Trino](https://trino.io/docs/current/functions/hyperloglog.html), [Redis's
+`PFCOUNT`](https://redis.io/docs/latest/develop/data-types/probabilistic/hyperloglogs/),
+[PostgreSQL's
+`hyperloglog`](https://github.com/postgres/postgres/blob/master/src/backend/lib/hyperloglog.c)
+extension) bake HLL directly into their engines.
+
+### Database Superpowers: Query Planning and GROUP BY Operations
+
+Approximate distinct counts guide query planners to choose efficient execution
+strategies. For example, most SQL engines must decide between a hash-based
+aggregation (fast but memory heavy) and a pipelined sort/group (low memory but
+requires sorted input). A wrong guess by orders of magnitude wastes resources.
+
+By feeding HLL-based estimates (e.g., "This group has ~10 million unique values")
+into the optimiser, systems like [Vertica](https://en.wikipedia.org/wiki/Vertica), PostgreSQL, and Snowflake select
+better plans and avoid costly spills to disk or full-table scans.
+
+### How HLL Works at a Glance
+
+1. Hash each input to a `64-bit` value.
+2. Use the first $p$ bits to select one of $2^p$ registers.
+3. Count leading zeros in the remaining bits (plus one) as the "rank".
+4. Store the maximum rank per register.
+5. Estimate cardinality via a bias-corrected harmonic mean across registers.
+
+This was taken further by [Stefan Heule et al.](https://research.google/pubs/hyperloglog-in-practice-algorithmic-engineering-of-a-state-of-the-art-cardinality-estimation-algorithm/)
+who introduced the HyperLogLog++ algorithm.
+
+HLL++ refines the original algorithm with:
+
+- **64-bit hashes** to reduce collisions at massive scales.
+- **Improved bias correction** for small cardinalities (linear counting switch).
+- **Sparse representation** for compact storage when few registers are non-zero.
+
+This yields higher accuracy (error ~0.5%) and graceful scaling from tiny to
+trillion-element workloads.
+
+### Implications and the Big Picture
+
+HyperLogLog sketches let Big Data systems _reason about size cheaply_ and one
+can sketch data, merge across partitions, and get fast, memory-efficient
+distinct counts -- trading a dash of accuracy for massive speed and scale.
 
 ## Memory Usage Comparison
 
@@ -351,7 +225,7 @@ print(f"HLL estimate: {sketch.estimate():.2f}")
 ```
 $ python memtest.py
 Memory used by Python set: 2445.36 MB
-Memory used by HLL sketch: 192.00 KB  # <--- 👀
+Memory used by HLL sketch: 192.00 KB
 Exact unique: 100000000
 HLL estimate: 98559344.17
 
@@ -370,7 +244,9 @@ probabilistic data structures.
 
 - Optionally, for memory measurement examples: `psutil` (`pip install psutil`).
 
-### From PyPI (if available)
+### From PyPI
+
+The package is not yet published to PyPI. Install from source for now (see below).
 
 ```bash
 pip install rusty-sketches
@@ -380,7 +256,7 @@ pip install rusty-sketches
 
 ```bash
 git clone https://github.com/tallamjr/sketches.git
-cd sketches/py-sketches
+cd sketches
 pip install .
 ```
 
@@ -393,7 +269,7 @@ pip install -e .[dev]
 **For TPC-H Performance Analysis Notebook:**
 
 ```bash
-# Install with visualization dependencies
+# Install with visualisation dependencies
 pip install -e .[dev]  # includes seaborn, matplotlib, pandas
 
 # Run the comprehensive business intelligence benchmarks
@@ -437,7 +313,8 @@ Import the available sketches:
 from sketches import (
     HllSketch, HllPlusPlusSketch, HllPlusPlusSparseSketch,
     CpcSketch, ThetaSketch,
-    LinearCounter, HybridCounter
+    LinearCounter, HybridCounter,
+    HllSketchMode, HllUnion
 )
 
 # Membership testing
@@ -450,21 +327,22 @@ from sketches import (
 )
 
 # Quantile estimation
-from sketches import KllSketch, TDigest, StreamingTDigest
+from sketches import KllSketch, TDigest, StreamingTDigest, ReqSketch
 
 # Sampling
 from sketches import (
     ReservoirSamplerR, ReservoirSamplerA,
-    WeightedReservoirSampler, StreamSampler
+    WeightedReservoirSampler, StreamSampler,
+    VarOptSketch
 )
 
 # Multi-dimensional
-from sketches import AodSketch
+from sketches import AodSketch, TupleSketch
 ```
 
-### 🎯 Business Intelligence Examples
+### Business Intelligence Examples
 
-For comprehensive real-world usage patterns, see our **TPC-H Performance Analysis Notebook**:
+For comprehensive real-world usage patterns, see the **TPC-H Performance Analysis Notebook**:
 
 - **`examples/tpch_performance_analysis.ipynb`** - Complete BI analysis with 6M+ records
 - **Business queries**: Customer counting, inventory analysis, order processing
@@ -621,7 +499,7 @@ for item, estimate, lower, upper in top_items:
 ```python
 from sketches import KllSketch, TDigest
 
-# KLL Sketch for quantiles (simplified implementation with ~20-30% error bounds)
+# KLL Sketch for quantiles (provable error bounds)
 kll = KllSketch.with_accuracy(epsilon=0.25, confidence=0.8)
 for value in data_stream:
     kll.update(value)
@@ -659,7 +537,7 @@ weighted_sampler.add_weighted("normal", weight=1.0)
 weighted_sample = weighted_sampler.sample_with_weights()
 ```
 
-### Linear & Hybrid Counter Example
+### Linear and Hybrid Counter Example
 
 ```python
 from sketches import LinearCounter, HybridCounter
@@ -747,7 +625,7 @@ Beyond the built-in dense and simple sparse sketches, HLL++ can be optimised fur
   }
   ```
 
-- **Hybrid Sparse→Dense Switch**: Start in sparse mode; once `map.len() > m/2`, materialise a dense `Vec<u8>` and switch to `HllPlusPlusSketch` for O(1) updates.
+- **Hybrid Sparse-to-Dense Switch**: Start in sparse mode; once `map.len() > m/2`, materialise a dense `Vec<u8>` and switch to `HllPlusPlusSketch` for O(1) updates.
   ```rust
   if sparse.map.len() > (1 << p) / 2 {
       let mut dense = HllPlusPlusSketch::new(p);
@@ -839,7 +717,105 @@ print(f"Estimated difference size (Theta): {difference.estimate():.2f}")
 # Estimated difference size (Theta): 76308.22
 ```
 
-## Roadmap & Missing Features
+## Performance
+
+**Comparison against Apache DataSketches (industry standard)**
+
+Benchmarks were conducted comparing this Rust-based implementation with the official Apache DataSketches Python library across key performance metrics.
+
+### Processing Throughput
+
+```
+HyperLogLog Updates (2M items):
++---------------------+--------------+-----------------+----------+
+| Implementation      | Time         | Throughput      | Ratio    |
++---------------------+--------------+-----------------+----------+
+| Apache DataSketches | 0.29s        | 7.1M items/sec | 5.2x     |
+| Our Library         | 1.51s        | 1.3M items/sec | baseline |
++---------------------+--------------+-----------------+----------+
+```
+
+### Memory Efficiency
+
+```
+HyperLogLog Memory Usage (1M items):
++---------------------+--------------+-----------------+
+| Implementation      | Memory Usage | Efficiency      |
++---------------------+--------------+-----------------+
+| Apache DataSketches | 32 KB        | 9x better       |
+| Our Library         | 288 KB       | baseline        |
++---------------------+--------------+-----------------+
+```
+
+### Accuracy Comparison
+
+```
+HyperLogLog Error Rates:
++--------------+-------------+-------------+----------+
+| Dataset Size | Our Error   | Apache Error| Winner   |
++--------------+-------------+-------------+----------+
+| 1,000        | 0.22%       | 0.72%       | Ours     |
+| 10,000       | 2.48%       | 0.72%       | Apache   |
+| 100,000      | 1.27%       | 1.23%       | Tie      |
+| 1,000,000    | 1.77%       | 1.14%       | Apache   |
++--------------+-------------+-------------+----------+
+```
+
+### Summary
+
+- **Accuracy**: Both libraries achieve less than 3% error rates across all tested cardinalities.
+- **Speed**: Apache DataSketches is approximately 5x faster due to its optimised C++ core.
+- **Memory**: Apache DataSketches uses approximately 9x less memory.
+- **Algorithm coverage**: This library provides 2x more algorithms (18 vs 9).
+- **Safety**: Rust guarantees memory safety and eliminates entire classes of bugs.
+
+Both libraries excel at their core mission: enabling approximate analytics on massive datasets with bounded memory and excellent accuracy.
+
+### When to Use Each
+
+**Choose this library for:**
+
+- **Algorithm diversity** -- sampling, frequency estimation, specialised sketches
+- **Rich analytics** -- confidence bounds, statistics, merging operations
+- **Memory safety** -- Rust eliminates segfaults and memory leaks
+- **Modern development** -- excellent type safety and error messages
+
+**Choose Apache DataSketches for:**
+
+- **Maximum performance** -- 5x faster processing
+- **Memory constraints** -- 9x lower memory usage
+- **Production scale** -- billions of items daily
+- **Enterprise deployment** -- proven stability
+
+## TPC-H Business Intelligence Benchmarks
+
+**Real-world performance analysis with 6M+ business records**
+
+Comprehensive benchmarking against actual TPC-H business data to demonstrate realistic performance characteristics:
+
+```bash
+# Run the TPC-H performance analysis notebook
+pytest --nbmake examples/tpch_performance_analysis.ipynb
+```
+
+**Key Business Intelligence Queries Tested:**
+
+- **Distinct customers placing orders** (1.5M records)
+- **Unique parts sold** (50K lineitem records)
+- **Orders with line items** (distinct order counting)
+
+**Performance Highlights with Real Data:**
+
+- **Sub-5% error rates** on critical business metrics
+- **1000x+ memory efficiency** vs traditional exact counting
+- **Millions of items/sec throughput** for streaming analytics
+- **Scalability analysis** from 1K to 50K+ items
+
+**[TPC-H Analysis Notebook](examples/tpch_performance_analysis.ipynb)**
+
+The notebook demonstrates practical business value including distinct counting for customer analytics, inventory management, and order processing with realistic error bounds and performance characteristics.
+
+## Roadmap and Missing Features
 
 While this library provides a comprehensive suite of probabilistic data structures, the following features are planned but not yet implemented:
 
@@ -875,8 +851,6 @@ While this library provides a comprehensive suite of probabilistic data structur
 2. Actual SIMD implementations to replace scalar fallbacks
 3. Polars custom expressions for seamless DataFrame integration
 4. Performance optimisations for Python bindings (batch operations)
-
-See [TODO.md](TODO.md) for the complete development roadmap.
 
 ## License
 
