@@ -22,11 +22,9 @@
 //! - Bloom, B. H. "Space/Time Trade-offs in Hash Coding with Allowable Errors."
 //!   Communications of the ACM, 1970.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
-#[cfg(feature = "optimized")]
-use crate::fast_hash;
 #[cfg(feature = "optimized")]
 use crate::simd_ops::bloom;
 #[cfg(feature = "optimized")]
@@ -82,7 +80,7 @@ impl BloomFilter {
     }
 
     /// Add an element to the filter
-    pub fn add<T: Hash>(&mut self, item: &T) {
+    pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hashes = self.hash_item(item);
 
         if self.use_simd && self.num_hash_functions >= 4 {
@@ -93,7 +91,7 @@ impl BloomFilter {
     }
 
     /// Check if an element might be in the filter
-    pub fn contains<T: Hash>(&self, item: &T) -> bool {
+    pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
         let hashes = self.hash_item(item);
 
         if self.use_simd && self.num_hash_functions >= 4 {
@@ -103,42 +101,19 @@ impl BloomFilter {
         }
     }
 
-    /// Generate hash values for an item
-    fn hash_item<T: Hash>(&self, item: &T) -> Vec<usize> {
-        #[cfg(feature = "optimized")]
-        {
-            let hash1 = fast_hash::fast_hash(item);
-            let hash2 = fast_hash::fast_hash_with_seed(&hash1, 0x517cc1b727220a95);
+    /// Generate hash values for an item using double hashing with xxh3
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+        let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
 
-            // Use double hashing to generate multiple hash functions
-            let mut hashes = Vec::with_capacity(self.num_hash_functions);
-            for i in 0..self.num_hash_functions {
-                let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-                hashes.push((hash as usize) % self.num_bits);
-            }
-
-            hashes
+        // Use double hashing to generate multiple hash functions
+        let mut hashes = Vec::with_capacity(self.num_hash_functions);
+        for i in 0..self.num_hash_functions {
+            let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
+            hashes.push((hash as usize) % self.num_bits);
         }
 
-        #[cfg(not(feature = "optimized"))]
-        {
-            let mut hasher1 = DefaultHasher::new();
-            item.hash(&mut hasher1);
-            let hash1 = hasher1.finish();
-
-            let mut hasher2 = DefaultHasher::new();
-            hash1.hash(&mut hasher2);
-            let hash2 = hasher2.finish();
-
-            // Use double hashing to generate multiple hash functions
-            let mut hashes = Vec::with_capacity(self.num_hash_functions);
-            for i in 0..self.num_hash_functions {
-                let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-                hashes.push((hash as usize) % self.num_bits);
-            }
-
-            hashes
-        }
+        hashes
     }
 
     /// Set bits using scalar operations
@@ -195,7 +170,7 @@ impl BloomFilter {
 
     /// Batch add multiple elements for better performance
     #[cfg(feature = "optimized")]
-    pub fn add_batch<T: Hash + Sync>(&mut self, items: &[T]) {
+    pub fn add_batch<T: Hashable + ?Sized + Sync>(&mut self, items: &[T]) {
         // Use parallel processing for large batches
         let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
             items.par_iter().map(|item| self.hash_item(item)).collect()
@@ -216,7 +191,7 @@ impl BloomFilter {
 
     /// Batch add fallback for non-optimized builds
     #[cfg(not(feature = "optimized"))]
-    pub fn add_batch<T: Hash>(&mut self, items: &[T]) {
+    pub fn add_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.add(item);
         }
@@ -224,7 +199,7 @@ impl BloomFilter {
 
     /// Batch check multiple elements for better performance
     #[cfg(feature = "optimized")]
-    pub fn contains_batch<T: Hash + Sync>(&self, items: &[T]) -> Vec<bool> {
+    pub fn contains_batch<T: Hashable + ?Sized + Sync>(&self, items: &[T]) -> Vec<bool> {
         // Use parallel processing for large batches
         let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
             items.par_iter().map(|item| self.hash_item(item)).collect()
@@ -248,7 +223,7 @@ impl BloomFilter {
 
     /// Batch check fallback for non-optimized builds
     #[cfg(not(feature = "optimized"))]
-    pub fn contains_batch<T: Hash>(&self, items: &[T]) -> Vec<bool> {
+    pub fn contains_batch<T: Hashable>(&self, items: &[T]) -> Vec<bool> {
         items.iter().map(|item| self.contains(item)).collect()
     }
 
@@ -339,7 +314,7 @@ impl CountingBloomFilter {
     }
 
     /// Add an element to the filter
-    pub fn add<T: Hash>(&mut self, item: &T) {
+    pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hashes = self.hash_item(item);
 
         for &pos in &hashes {
@@ -350,7 +325,7 @@ impl CountingBloomFilter {
     }
 
     /// Remove an element from the filter
-    pub fn remove<T: Hash>(&mut self, item: &T) -> bool {
+    pub fn remove<T: Hashable + ?Sized>(&mut self, item: &T) -> bool {
         let hashes = self.hash_item(item);
 
         // Check if all positions have non-zero counts
@@ -371,7 +346,7 @@ impl CountingBloomFilter {
     }
 
     /// Check if an element might be in the filter
-    pub fn contains<T: Hash>(&self, item: &T) -> bool {
+    pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
         let hashes = self.hash_item(item);
 
         for &pos in &hashes {
@@ -382,15 +357,10 @@ impl CountingBloomFilter {
         true
     }
 
-    /// Generate hash values for an item
-    fn hash_item<T: Hash>(&self, item: &T) -> Vec<usize> {
-        let mut hasher1 = DefaultHasher::new();
-        item.hash(&mut hasher1);
-        let hash1 = hasher1.finish();
-
-        let mut hasher2 = DefaultHasher::new();
-        hash1.hash(&mut hasher2);
-        let hash2 = hasher2.finish();
+    /// Generate hash values for an item using double hashing with xxh3
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+        let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
 
         let mut hashes = Vec::with_capacity(self.num_hash_functions);
         for i in 0..self.num_hash_functions {
@@ -502,5 +472,23 @@ mod tests {
         assert!(stats.num_hash_functions > 0);
         assert_eq!(stats.bits_set, 0); // Empty filter
         assert_eq!(stats.fill_ratio, 0.0);
+    }
+
+    #[test]
+    fn bloom_fpr_reasonable_new_hash() {
+        let mut b = BloomFilter::new(10_000, 0.01, false);
+        for i in 0u64..10_000 {
+            b.add(&i);
+        }
+        for i in 0u64..10_000 {
+            assert!(b.contains(&i));
+        }
+        let mut fp = 0;
+        for i in 10_000u64..20_000 {
+            if b.contains(&i) {
+                fp += 1;
+            }
+        }
+        assert!(fp as f64 / 10_000.0 < 0.03, "fpr too high");
     }
 }

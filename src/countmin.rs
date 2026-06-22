@@ -24,15 +24,14 @@
 //! - Charikar, Chen, Farach-Colton. "Finding Frequent Items in Data Streams."
 //!   Theoretical Computer Science, 2004.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
 /// Count-Min Sketch for frequency estimation with optional SIMD optimizations
 pub struct CountMinSketch {
     width: usize,
     depth: usize,
     table: Vec<Vec<u64>>,
-    hash_seeds: Vec<u64>,
     use_simd: bool,
     conservative_update: bool,
 }
@@ -48,19 +47,10 @@ impl CountMinSketch {
     pub fn new(width: usize, depth: usize, use_simd: bool, conservative_update: bool) -> Self {
         assert!(width > 0 && depth > 0, "Width and depth must be positive");
 
-        // Initialize hash seeds for different hash functions
-        let mut hash_seeds = Vec::with_capacity(depth);
-        let mut seed = 1u64;
-        for _ in 0..depth {
-            hash_seeds.push(seed);
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223); // Linear congruential generator
-        }
-
         CountMinSketch {
             width,
             depth,
             table: vec![vec![0u64; width]; depth],
-            hash_seeds,
             use_simd,
             conservative_update,
         }
@@ -92,7 +82,7 @@ impl CountMinSketch {
     }
 
     /// Update the count for an item
-    pub fn update<T: Hash>(&mut self, item: &T, count: u64) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, count: u64) {
         let hashes = self.hash_item(item);
 
         if self.use_simd && self.depth >= 4 {
@@ -103,12 +93,12 @@ impl CountMinSketch {
     }
 
     /// Increment the count for an item by 1
-    pub fn increment<T: Hash>(&mut self, item: &T) {
+    pub fn increment<T: Hashable + ?Sized>(&mut self, item: &T) {
         self.update(item, 1);
     }
 
     /// Estimate the frequency of an item
-    pub fn estimate<T: Hash>(&self, item: &T) -> u64 {
+    pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
         let hashes = self.hash_item(item);
 
         if self.use_simd && self.depth >= 4 {
@@ -118,19 +108,17 @@ impl CountMinSketch {
         }
     }
 
-    /// Generate hash values for an item
-    fn hash_item<T: Hash>(&self, item: &T) -> Vec<usize> {
-        let mut hashes = Vec::with_capacity(self.depth);
-
-        for &seed in &self.hash_seeds {
-            let mut hasher = DefaultHasher::new();
-            seed.hash(&mut hasher);
-            item.hash(&mut hasher);
-            let hash = hasher.finish();
-            hashes.push((hash as usize) % self.width);
+    /// Generate hash values for an item using xxh3 with row mixing
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+        let base = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let mut positions = Vec::with_capacity(self.depth);
+        for row in 0..self.depth {
+            let h = base
+                .rotate_left(row as u32)
+                .wrapping_mul(0x9E3779B97F4A7C15);
+            positions.push((h % self.width as u64) as usize);
         }
-
-        hashes
+        positions
     }
 
     /// Update counts using scalar operations
@@ -383,8 +371,6 @@ pub struct CountSketch {
     width: usize,
     depth: usize,
     table: Vec<Vec<i64>>,
-    hash_seeds: Vec<u64>,
-    sign_seeds: Vec<u64>,
 }
 
 impl CountSketch {
@@ -392,28 +378,15 @@ impl CountSketch {
     pub fn new(width: usize, depth: usize) -> Self {
         assert!(width > 0 && depth > 0, "Width and depth must be positive");
 
-        let mut hash_seeds = Vec::with_capacity(depth);
-        let mut sign_seeds = Vec::with_capacity(depth);
-        let mut seed = 1u64;
-
-        for _ in 0..depth {
-            hash_seeds.push(seed);
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            sign_seeds.push(seed);
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        }
-
         CountSketch {
             width,
             depth,
             table: vec![vec![0i64; width]; depth],
-            hash_seeds,
-            sign_seeds,
         }
     }
 
     /// Update the count for an item
-    pub fn update<T: Hash>(&mut self, item: &T, count: i64) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, count: i64) {
         for i in 0..self.depth {
             let hash_pos = self.hash_position(item, i);
             let sign = self.hash_sign(item, i);
@@ -422,7 +395,7 @@ impl CountSketch {
     }
 
     /// Estimate the frequency of an item
-    pub fn estimate<T: Hash>(&self, item: &T) -> i64 {
+    pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> i64 {
         let mut estimates = Vec::with_capacity(self.depth);
 
         for i in 0..self.depth {
@@ -437,23 +410,21 @@ impl CountSketch {
     }
 
     /// Generate hash position for an item in a specific row
-    fn hash_position<T: Hash>(&self, item: &T, row: usize) -> usize {
-        let mut hasher = DefaultHasher::new();
-        self.hash_seeds[row].hash(&mut hasher);
-        item.hash(&mut hasher);
-        (hasher.finish() as usize) % self.width
+    fn hash_position<T: Hashable + ?Sized>(&self, item: &T, row: usize) -> usize {
+        let base = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let h = base
+            .rotate_left(row as u32)
+            .wrapping_mul(0x9E3779B97F4A7C15);
+        (h % self.width as u64) as usize
     }
 
     /// Generate hash sign (+1 or -1) for an item in a specific row
-    fn hash_sign<T: Hash>(&self, item: &T, row: usize) -> i64 {
-        let mut hasher = DefaultHasher::new();
-        self.sign_seeds[row].hash(&mut hasher);
-        item.hash(&mut hasher);
-        if hasher.finish().is_multiple_of(2) {
-            1
-        } else {
-            -1
-        }
+    fn hash_sign<T: Hashable + ?Sized>(&self, item: &T, row: usize) -> i64 {
+        let base = hash64_of(&Xxh3Hasher, item, 0xC2B2AE3D27D4EB4F);
+        let h = base
+            .rotate_left(row as u32)
+            .wrapping_mul(0x9E3779B97F4A7C15);
+        if h.is_multiple_of(2) { 1 } else { -1 }
     }
 }
 
@@ -564,5 +535,14 @@ mod tests {
         assert_eq!(stats.depth, 5);
         assert!(stats.fill_ratio > 0.0);
         assert!(stats.total_count > 0);
+    }
+
+    #[test]
+    fn countmin_overestimates_only_new_hash() {
+        let mut c = CountMinSketch::new(2048, 5, false, false);
+        for _ in 0..500 {
+            c.increment(&"hot");
+        }
+        assert!(c.estimate(&"hot") >= 500);
     }
 }
