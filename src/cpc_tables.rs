@@ -19,8 +19,6 @@ pub(crate) const ICON_POLYNOMIAL_NUM_COEFFICIENTS: usize = 1 + ICON_POLYNOMIAL_D
 pub(crate) const ICON_TABLE_SIZE: usize =
     ICON_POLYNOMIAL_NUM_COEFFICIENTS * (1 + (ICON_MAX_LOG_K - ICON_MIN_LOG_K));
 
-// consumed by the sketch core rewrite in Task 3
-#[allow(dead_code)]
 #[rustfmt::skip]
 pub(crate) static KXP_BYTE_TABLE: [f64; 256] = [
     0.99609375, 0.49609375, 0.74609375, 0.24609375, 0.87109375, 0.37109375, 0.62109375, 0.12109375,
@@ -198,8 +196,6 @@ pub(crate) static ICON_POLYNOMIAL_COEFFICIENTS: [f64; ICON_TABLE_SIZE] = [
     0.4588937864564729963, -0.08824617586088029375, 0.01147732114826570046, -0.00090384524860747295, 3.253252703695579795e-05,
 ];
 
-// consumed by the sketch core rewrite in Task 3
-#[allow(dead_code)]
 #[rustfmt::skip]
 #[allow(clippy::excessive_precision)]
 pub(crate) static INVERSE_POWERS_OF_2: [f64; 256] = [
