@@ -1,0 +1,4 @@
+# Generated benchmark artefacts are not tracked; only the schema doc is.
+*.csv
+plots/
+!schema.md
