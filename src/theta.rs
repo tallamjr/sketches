@@ -24,8 +24,8 @@
 //! - Dasgupta, Lang, Rhodes, Thaler. "A Framework for Estimating Stream Expression
 //!   Cardinalities." ICDE, 2016.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
 
 /// Maximum theta value representing the full hash space.
 const MAX_THETA: u64 = u64::MAX;
@@ -84,11 +84,10 @@ impl ThetaSketch {
         }
     }
 
-    /// Update the sketch with an item implementing Hash.
-    pub fn update<T: Hash>(&mut self, item: &T) {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        let hash = hasher.finish();
+    /// Update the sketch with an item implementing Hashable.
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
+        let h = hash128_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash = (h >> 64) as u64; // top 64 bits as the uniform value
 
         // The hash value 0 is reserved as the empty sentinel.
         // Remap it to 1 so we never store a zero.
@@ -1243,5 +1242,16 @@ mod tests {
             error_ratio < 0.10,
             "Self-intersect estimate {est} too far from {expected} (error {error_ratio})"
         );
+    }
+
+    #[test]
+    fn theta_estimate_within_bounds_new_hash() {
+        let mut s = ThetaSketch::new(4096);
+        for i in 0u64..100_000 {
+            s.update(&i);
+        }
+        let est = s.estimate();
+        let err = (est - 100_000.0).abs() / 100_000.0;
+        assert!(err < 0.05, "rel error {err} too high");
     }
 }

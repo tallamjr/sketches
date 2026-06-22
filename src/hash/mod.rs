@@ -46,7 +46,7 @@ macro_rules! hashable_int {
         }
     )* };
 }
-hashable_int!(u32, u64, i32, i64, u128, i128);
+hashable_int!(u32, u64, i32, i64, u128, i128, usize, isize);
 
 impl Hashable for f64 {
     fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
