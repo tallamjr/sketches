@@ -188,7 +188,10 @@ impl Serializable for HllSketch {
                 .unwrap_or(0)
         };
 
-        let mut w = SketchWriter::with_capacity(5 + 3 + m);
+        // HIP trailer: hip_accum (f64), kxq0 (f64), kxq1 (f64), out_of_order (u8).
+        let (hip_accum, kxq0, kxq1, out_of_order) = self.hip_raw_state();
+
+        let mut w = SketchWriter::with_capacity(5 + 3 + m + 25);
         SketchHeader {
             family: Family::Hll,
             version: 1,
@@ -201,6 +204,11 @@ impl Serializable for HllSketch {
         w.put_u8(0); // mode: 0 = HLL8
         // Data: one byte per register
         w.put_bytes(&register_bytes);
+        // HIP trailer, written on every path so the layout is uniform.
+        w.put_f64_le(hip_accum);
+        w.put_f64_le(kxq0);
+        w.put_f64_le(kxq1);
+        w.put_u8(out_of_order as u8);
         w.into_vec()
     }
 
@@ -223,6 +231,16 @@ impl Serializable for HllSketch {
         let is_empty = (flags & HLL_FLAG_EMPTY) != 0;
 
         if is_empty {
+            // The empty path still writes the (all-zero) registers and HIP
+            // trailer for a uniform layout; consume them to keep the reader
+            // aligned, then return a fresh sketch (its HIP is the `new` default).
+            if r.remaining() >= m {
+                let _registers = r.get_bytes(m)?;
+            }
+            let _hip_accum = r.get_f64_le()?;
+            let _kxq0 = r.get_f64_le()?;
+            let _kxq1 = r.get_f64_le()?;
+            let _out_of_order = r.get_u8()?;
             return Ok(HllSketch::new(lg_k));
         }
 
@@ -234,7 +252,18 @@ impl Serializable for HllSketch {
         }
 
         let registers = r.get_bytes(m)?.to_vec();
-        Ok(HllSketch::from_registers(lg_k, registers))
+        let hip_accum = r.get_f64_le()?;
+        let kxq0 = r.get_f64_le()?;
+        let kxq1 = r.get_f64_le()?;
+        let out_of_order = r.get_u8()? != 0;
+        Ok(HllSketch::from_registers_with_hip(
+            lg_k,
+            registers,
+            hip_accum,
+            kxq0,
+            kxq1,
+            out_of_order,
+        ))
     }
 
     fn family_id(&self) -> u8 {
@@ -814,8 +843,9 @@ mod tests {
         let sketch = HllSketch::new(12);
         let bytes = Serializable::to_bytes(&sketch);
 
-        // p=12 means m=4096 registers + 8 byte preamble
-        let expected_size = HLL_PREAMBLE_BYTES + (1 << 12);
+        // p=12 means m=4096 registers + 8 byte preamble + 25 byte HIP trailer
+        // (hip_accum f64, kxq0 f64, kxq1 f64, out_of_order u8).
+        let expected_size = HLL_PREAMBLE_BYTES + (1 << 12) + 25;
         assert_eq!(
             bytes.len(),
             expected_size,

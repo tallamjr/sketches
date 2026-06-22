@@ -31,6 +31,7 @@ pub struct HllSketch {
     p: u8,
     m: usize,
     registers: Vec<u8>,
+    hip: HipEstimator,
 }
 
 impl HllSketch {
@@ -41,6 +42,7 @@ impl HllSketch {
             p,
             m,
             registers: vec![0; m],
+            hip: HipEstimator::new(m),
         }
     }
 
@@ -52,8 +54,10 @@ impl HllSketch {
         let leading = w.leading_zeros().saturating_add(1);
         let rank = leading.min(64) as u8;
 
-        if self.registers[idx] < rank {
+        let old = self.registers[idx];
+        if rank > old {
             self.registers[idx] = rank;
+            self.hip.register_updated(self.m, old, rank);
         }
     }
 
@@ -65,7 +69,15 @@ impl HllSketch {
     }
 
     /// Estimate the cardinality.
+    ///
+    /// Uses the lower-variance HIP (Historic Inverse Probability) estimator when
+    /// the sketch has been built in order. If the HIP state is invalid (a
+    /// registers-only reconstruction), it falls back to the classic composite
+    /// HLL estimator below.
     pub fn estimate(&self) -> f64 {
+        if let Some(hip) = self.hip.estimate() {
+            return hip;
+        }
         let m = self.m as f64;
         let mut sum = 0f64;
         let mut zeros = 0usize;
@@ -101,6 +113,10 @@ impl HllSketch {
             );
         }
 
+        // A merge breaks the in-order assumption HIP relies on, so invalidate it
+        // and fall back to the classic composite estimator for the merged sketch.
+        self.hip.mark_out_of_order();
+
         for i in 0..self.m {
             if self.registers[i] < other.registers[i] {
                 self.registers[i] = other.registers[i];
@@ -129,10 +145,48 @@ impl HllSketch {
     }
 
     /// Create an HllSketch from raw register bytes and precision p.
+    ///
+    /// A registers-only reconstruction has no valid HIP history, so the HIP
+    /// estimator is marked out-of-order and `estimate` will use the classic
+    /// composite estimator.
     pub fn from_registers(p: u8, registers: Vec<u8>) -> Self {
         let m = 1 << p;
         assert_eq!(registers.len(), m, "Register count must equal 2^p");
-        HllSketch { p, m, registers }
+        let mut hip = HipEstimator::new(m);
+        hip.mark_out_of_order();
+        HllSketch {
+            p,
+            m,
+            registers,
+            hip,
+        }
+    }
+
+    /// Create an HllSketch from raw register bytes plus restored HIP state.
+    ///
+    /// Used by deserialisation to faithfully reconstruct the in-order HIP
+    /// estimate persisted alongside the registers.
+    pub(crate) fn from_registers_with_hip(
+        p: u8,
+        registers: Vec<u8>,
+        hip_accum: f64,
+        kxq0: f64,
+        kxq1: f64,
+        out_of_order: bool,
+    ) -> Self {
+        let m = 1 << p;
+        assert_eq!(registers.len(), m, "Register count must equal 2^p");
+        HllSketch {
+            p,
+            m,
+            registers,
+            hip: HipEstimator::from_raw(hip_accum, kxq0, kxq1, out_of_order),
+        }
+    }
+
+    /// Raw HIP state for serialisation: (hip_accum, kxq0, kxq1, out_of_order).
+    pub(crate) fn hip_raw_state(&self) -> (f64, f64, f64, bool) {
+        self.hip.raw_state()
     }
 
     /// Get memory usage in bytes.
@@ -754,6 +808,7 @@ impl SetMode {
 // -- HIP Estimator -----------------------------------------------------------
 
 /// Historic Inverse Probability estimator for improved single-sketch accuracy.
+#[derive(Debug)]
 struct HipEstimator {
     hip_accum: f64,
     kxq0: f64,
@@ -806,6 +861,21 @@ impl HipEstimator {
 
     fn mark_out_of_order(&mut self) {
         self.out_of_order = true;
+    }
+
+    /// Raw HIP state for serialisation: (hip_accum, kxq0, kxq1, out_of_order).
+    pub(crate) fn raw_state(&self) -> (f64, f64, f64, bool) {
+        (self.hip_accum, self.kxq0, self.kxq1, self.out_of_order)
+    }
+
+    /// Reconstruct a HIP estimator from raw serialised state.
+    pub(crate) fn from_raw(hip_accum: f64, kxq0: f64, kxq1: f64, out_of_order: bool) -> Self {
+        HipEstimator {
+            hip_accum,
+            kxq0,
+            kxq1,
+            out_of_order,
+        }
     }
 
     /// Returns Some(hip_estimate) if valid, None if out_of_order.
