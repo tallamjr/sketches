@@ -3,10 +3,16 @@
 //!
 //! Usage:
 //!   runner-ours --n <N> [--tpch <csv_path> --col <COL>] --out <results.csv>
+//!   runner-ours --trials <T> --n <N> --out <rmse.csv>
 //!
-//! Always runs the synthetic dataset. If `--tpch` is given, also runs that
-//! column. The TPC-H dataset label is derived from the CSV file stem (for
-//! example `customer.csv` becomes `customer`).
+//! Without `--trials`, always runs the synthetic dataset; if `--tpch` is given,
+//! also runs that column. The TPC-H dataset label is derived from the CSV file
+//! stem (for example `customer.csv` becomes `customer`).
+//!
+//! With `--trials <T>`, runs the multi-trial RMSE mode instead: `T` independent
+//! trials of `N` distinct items each, emitting the RMSE schema documented in
+//! `benchmarks/results/rmse_schema.md`. The `--tpch`/`--col` flags are ignored
+//! in this mode.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -18,6 +24,7 @@ struct Args {
     tpch: Option<PathBuf>,
     col: Option<usize>,
     out: PathBuf,
+    trials: Option<u64>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -25,6 +32,7 @@ fn parse_args() -> Result<Args, String> {
     let mut tpch: Option<PathBuf> = None;
     let mut col: Option<usize> = None;
     let mut out: Option<PathBuf> = None;
+    let mut trials: Option<u64> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -32,6 +40,13 @@ fn parse_args() -> Result<Args, String> {
             "--n" => {
                 let v = args.next().ok_or("--n requires a value")?;
                 n = Some(v.parse().map_err(|_| format!("invalid --n value: {v}"))?);
+            }
+            "--trials" => {
+                let v = args.next().ok_or("--trials requires a value")?;
+                trials = Some(
+                    v.parse()
+                        .map_err(|_| format!("invalid --trials value: {v}"))?,
+                );
             }
             "--tpch" => {
                 let v = args.next().ok_or("--tpch requires a path")?;
@@ -55,7 +70,13 @@ fn parse_args() -> Result<Args, String> {
         return Err("--tpch and --col must be given together".to_string());
     }
 
-    Ok(Args { n, tpch, col, out })
+    Ok(Args {
+        n,
+        tpch,
+        col,
+        out,
+        trials,
+    })
 }
 
 /// Derive the dataset label from a TPC-H CSV path (file stem, lowercased).
@@ -67,6 +88,13 @@ fn dataset_label(path: &Path) -> String {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+
+    if let Some(trials) = args.trials {
+        let lines = runner_ours::run_rmse(trials, args.n);
+        write_lines(&args.out, &lines)
+            .map_err(|e| format!("failed to write {:?}: {e}", args.out))?;
+        return Ok(());
+    }
 
     let mut lines = runner_ours::run(args.n);
 
