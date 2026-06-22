@@ -491,7 +491,7 @@ impl Serializable for CpcSketch {
         buf.extend_from_slice(&THETA_SEED_HASH.to_le_bytes()); // bytes 6-7
 
         if !is_empty {
-            buf.extend_from_slice(&(self.num_coupons() as u32).to_le_bytes()); // bytes 8-11
+            buf.extend_from_slice(&self.num_coupons().to_le_bytes()); // bytes 8-11
             // Length of native payload
             buf.extend_from_slice(&(native_bytes.len() as u32).to_le_bytes()); // bytes 12-15
         } else {
