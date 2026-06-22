@@ -2,5 +2,6 @@
   "hll": 0.02,
   "theta": 0.03,
   "kll": 0.03,
-  "countmin": 1.0
+  "countmin": 1.0,
+  "cpc": 0.02
 }
