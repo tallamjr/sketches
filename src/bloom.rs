@@ -170,7 +170,7 @@ impl BloomFilter {
 
     /// Batch add multiple elements for better performance
     #[cfg(feature = "optimized")]
-    pub fn add_batch<T: Hashable + ?Sized + Sync>(&mut self, items: &[T]) {
+    pub fn add_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
         // Use parallel processing for large batches
         let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
             items.par_iter().map(|item| self.hash_item(item)).collect()
@@ -199,7 +199,7 @@ impl BloomFilter {
 
     /// Batch check multiple elements for better performance
     #[cfg(feature = "optimized")]
-    pub fn contains_batch<T: Hashable + ?Sized + Sync>(&self, items: &[T]) -> Vec<bool> {
+    pub fn contains_batch<T: Hashable + Sync>(&self, items: &[T]) -> Vec<bool> {
         // Use parallel processing for large batches
         let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
             items.par_iter().map(|item| self.hash_item(item)).collect()

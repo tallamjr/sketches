@@ -27,6 +27,13 @@
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
+/// Derive a per-row seed that is well-spread across rows.
+/// Multiplying by a large odd constant (Fibonacci hashing) gives good mixing.
+#[inline]
+fn row_seed(base_seed: u64, row: usize) -> u64 {
+    base_seed.wrapping_add((row as u64).wrapping_mul(0x9E3779B97F4A7C15))
+}
+
 /// Count-Min Sketch for frequency estimation with optional SIMD optimizations
 pub struct CountMinSketch {
     width: usize,
@@ -108,14 +115,14 @@ impl CountMinSketch {
         }
     }
 
-    /// Generate hash values for an item using xxh3 with row mixing
+    /// Generate hash values for an item using one independent xxh3 hash per row.
+    ///
+    /// Each row receives a distinct seed derived from DEFAULT_SEED, ensuring
+    /// pairwise-independent hashes as required by the Count-Min error guarantee.
     fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
-        let base = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
         let mut positions = Vec::with_capacity(self.depth);
         for row in 0..self.depth {
-            let h = base
-                .rotate_left(row as u32)
-                .wrapping_mul(0x9E3779B97F4A7C15);
+            let h = hash64_of(&Xxh3Hasher, item, row_seed(DEFAULT_SEED, row));
             positions.push((h % self.width as u64) as usize);
         }
         positions
@@ -409,21 +416,21 @@ impl CountSketch {
         estimates[estimates.len() / 2]
     }
 
-    /// Generate hash position for an item in a specific row
+    /// Generate hash position for an item in a specific row.
+    ///
+    /// Each row uses an independent seed so positions across rows are
+    /// pairwise independent, as required by Count Sketch's analysis.
     fn hash_position<T: Hashable + ?Sized>(&self, item: &T, row: usize) -> usize {
-        let base = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
-        let h = base
-            .rotate_left(row as u32)
-            .wrapping_mul(0x9E3779B97F4A7C15);
+        let h = hash64_of(&Xxh3Hasher, item, row_seed(DEFAULT_SEED, row));
         (h % self.width as u64) as usize
     }
 
-    /// Generate hash sign (+1 or -1) for an item in a specific row
+    /// Generate hash sign (+1 or -1) for an item in a specific row.
+    ///
+    /// Uses a separate base seed (0xC2B2AE3D27D4EB4F) so the sign hash is
+    /// independent of the position hash. The low bit selects +1 or -1.
     fn hash_sign<T: Hashable + ?Sized>(&self, item: &T, row: usize) -> i64 {
-        let base = hash64_of(&Xxh3Hasher, item, 0xC2B2AE3D27D4EB4F);
-        let h = base
-            .rotate_left(row as u32)
-            .wrapping_mul(0x9E3779B97F4A7C15);
+        let h = hash64_of(&Xxh3Hasher, item, row_seed(0xC2B2AE3D27D4EB4F, row));
         if h.is_multiple_of(2) { 1 } else { -1 }
     }
 }
@@ -544,5 +551,18 @@ mod tests {
             c.increment(&"hot");
         }
         assert!(c.estimate(&"hot") >= 500);
+    }
+
+    #[test]
+    fn countmin_rows_are_independent() {
+        // With a wide sketch (4096 columns) and independent per-row hashes,
+        // a single item should map to different columns across almost all rows.
+        let c = CountMinSketch::new(4096, 5, false, false);
+        let positions = c.hash_item(&"some_item");
+        let distinct: std::collections::HashSet<usize> = positions.iter().copied().collect();
+        assert!(
+            distinct.len() >= 4,
+            "rows collapse to same column: {positions:?}"
+        );
     }
 }
