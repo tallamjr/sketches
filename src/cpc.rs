@@ -855,9 +855,110 @@ impl CpcUnion {
     }
 }
 
+/// ICON + HIP cardinality estimator for CPC sketches.
+///
+/// Ported from the Apache DataSketches Rust reference
+/// (`cpc/estimator.rs`). The ICON estimator is defined by Kevin Lang's
+/// FM85 arXiv paper. This module reproduces the fast approximate
+/// implementation: an exponential approximation for large coupon counts
+/// and a degree-19 polynomial approximation otherwise, both consuming the
+/// `ICON_POLYNOMIAL_COEFFICIENTS` table from `cpc_tables`.
+mod estimator {
+    use crate::cpc_tables::{
+        ICON_MAX_LOG_K, ICON_MIN_LOG_K, ICON_POLYNOMIAL_COEFFICIENTS,
+        ICON_POLYNOMIAL_NUM_COEFFICIENTS,
+    };
+
+    /// Evaluate a polynomial via Horner's method over `coefficients[start..start+num]`.
+    fn evaluate_polynomial(coefficients: &[f64], start: usize, num: usize, x: f64) -> f64 {
+        let end = start + num - 1;
+        let mut total = coefficients[end];
+        for i in (start..end).rev() {
+            total *= x;
+            total += coefficients[i];
+        }
+        total
+    }
+
+    /// Exponential approximation of the ICON estimator for large coupon counts.
+    fn icon_exponential_approximation(k: f64, c: f64) -> f64 {
+        0.7940236163830469 * k * 2f64.powf(c / k)
+    }
+
+    /// ICON cardinality estimate for a sketch with the given `lg_k` and coupon count.
+    // consumed in Task 3
+    #[allow(dead_code)]
+    pub(super) fn icon_estimate(lg_k: u8, num_coupons: u32) -> f64 {
+        let lg_k = lg_k as usize;
+        assert!(
+            (ICON_MIN_LOG_K..=ICON_MAX_LOG_K).contains(&lg_k),
+            "lg_k out of range; got {lg_k}",
+        );
+
+        match num_coupons {
+            0 => return 0.0,
+            1 => return 1.0,
+            _ => {}
+        }
+
+        let k = (1 << lg_k) as f64;
+        let c = num_coupons as f64;
+
+        // Differing thresholds ensure that the approximated estimator is monotonically increasing.
+        let threshold_factor = if lg_k < 14 { 5.7 } else { 5.6 };
+        if c > threshold_factor * k {
+            return icon_exponential_approximation(k, c);
+        }
+
+        let factor = evaluate_polynomial(
+            &ICON_POLYNOMIAL_COEFFICIENTS,
+            ICON_POLYNOMIAL_NUM_COEFFICIENTS * (lg_k - ICON_MIN_LOG_K),
+            ICON_POLYNOMIAL_NUM_COEFFICIENTS,
+            // The constant 2.0 is baked into the table ICON_POLYNOMIAL_COEFFICIENTS.
+            // This factor, although somewhat arbitrary, is based on extensive characterization
+            // studies and is considered a safe conservative factor.
+            c / (2.0 * k),
+        );
+        let ratio = c / k;
+        // The constant 66.774757 is baked into the table ICON_POLYNOMIAL_COEFFICIENTS.
+        // This factor, although somewhat arbitrary, is based on extensive characterization studies
+        // and is considered a safe conservative factor.
+        let term = 1.0 + (ratio * ratio * ratio / 66.774757);
+        let result = c * factor * term;
+        if result >= c { result } else { c }
+    }
+
+    /// Combined CPC estimate: HIP accumulator when available, ICON otherwise.
+    // consumed in Task 3
+    #[allow(dead_code)]
+    pub(super) fn cpc_estimate(
+        merge_flag: bool,
+        hip_est_accum: f64,
+        lg_k: u8,
+        num_coupons: u32,
+    ) -> f64 {
+        if !merge_flag {
+            hip_est_accum
+        } else {
+            icon_estimate(lg_k, num_coupons)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_estimate_is_reasonable_and_monotonic() {
+        // icon estimate must rise with coupon count and stay near the true
+        // cardinality regime for a mid lg_k. These bounds are derived from the
+        // reference behaviour, not a crash check.
+        let e_small = estimator::icon_estimate(12, 100);
+        let e_big = estimator::icon_estimate(12, 3000);
+        assert!(e_big > e_small);
+        assert!(e_small > 90.0 && e_small < 130.0, "icon(12,100)={e_small}");
+    }
 
     #[test]
     fn test_cpc_empty() {
