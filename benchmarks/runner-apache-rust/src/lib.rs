@@ -221,6 +221,63 @@ fn countmin_row<T: Item>(dataset: &str, items: &[T]) -> String {
     )
 }
 
+/// The exact CSV header line for the multi-trial RMSE mode (`--trials`).
+///
+/// This schema is separate from [`HEADER`]; the two are never mixed in one
+/// file. Its columns match `runner-ours` so the two implementations can be
+/// compared row-for-row.
+pub const RMSE_HEADER: &str =
+    "implementation,sketch,lg_k,trials,n_per_trial,rmse,mean_rel_error,max_rel_error";
+
+/// Format a single RMSE summary row from a slice of per-trial relative errors.
+///
+/// `rmse = sqrt(mean(rel_error^2))`, `mean_rel_error = mean(rel_error)`, and
+/// `max_rel_error = max(rel_error)`.
+fn rmse_row(
+    implementation: &str,
+    sketch: &str,
+    lg_k: u8,
+    trials: u64,
+    n: u64,
+    errors: &[f64],
+) -> String {
+    let count = errors.len() as f64;
+    let rmse = (errors.iter().map(|e| e * e).sum::<f64>() / count).sqrt();
+    let mean = errors.iter().sum::<f64>() / count;
+    let max = errors.iter().copied().fold(0.0_f64, f64::max);
+    format!("{implementation},{sketch},{lg_k},{trials},{n},{rmse:.6},{mean:.6},{max:.6}")
+}
+
+/// Run `trials` independent trials of `n` distinct items each (trial t over the
+/// disjoint range [t*n, (t+1)*n)) and emit one RMSE summary row per sketch,
+/// using the upstream Apache `datasketches` crate at `lg_k = 12`.
+pub fn run_rmse(trials: u64, n: u64) -> Vec<String> {
+    let (mut theta_errs, mut hll_errs, mut cpc_errs) = (Vec::new(), Vec::new(), Vec::new());
+    let truth = n as f64;
+    for t in 0..trials {
+        let start = t * n;
+        let mut theta = ThetaSketch::builder().lg_k(12).build();
+        let mut hll = HllSketch::new(12, HllType::Hll8);
+        let mut cpc = CpcSketch::new(12);
+        for i in start..start + n {
+            // Apache `update<T: Hash>(value: T)` takes the value by value; `u64`
+            // is `Copy` so the same `i` feeds all three sketches.
+            theta.update(i);
+            hll.update(i);
+            cpc.update(i);
+        }
+        theta_errs.push((theta.estimate() - truth).abs() / truth);
+        hll_errs.push((hll.estimate() - truth).abs() / truth);
+        cpc_errs.push((cpc.estimate() - truth).abs() / truth);
+    }
+    vec![
+        RMSE_HEADER.to_string(),
+        rmse_row("apache-rust", "theta", 12, trials, n, &theta_errs),
+        rmse_row("apache-rust", "hll", 12, trials, n, &hll_errs),
+        rmse_row("apache-rust", "cpc", 12, trials, n, &cpc_errs),
+    ]
+}
+
 /// Produce all CSV lines for the synthetic dataset (header first).
 pub fn run(n: u64) -> Vec<String> {
     let synthetic: Vec<u64> = synthetic_distinct(n).collect();
