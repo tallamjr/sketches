@@ -20,24 +20,16 @@
 //! - Heule, Nunkesser, Hall. "HyperLogLog in Practice: Algorithmic Engineering of a
 //!   State of the Art Cardinality Estimation Algorithm." EDBT, 2013.
 
-#[cfg(not(feature = "optimized"))]
 use std::collections::BTreeMap;
 
-#[cfg(feature = "optimized")]
-use crate::compact_memory::{CompactHashTable, PackedRegisters};
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
-#[cfg(feature = "optimized")]
-use crate::simd_ops::hyperloglog;
 
 /// HyperLogLog Sketch for approximate distinct counting.
 #[derive(Debug)]
 pub struct HllSketch {
     p: u8,
     m: usize,
-    #[cfg(feature = "optimized")]
-    registers: PackedRegisters,
-    #[cfg(not(feature = "optimized"))]
     registers: Vec<u8>,
 }
 
@@ -48,9 +40,6 @@ impl HllSketch {
         HllSketch {
             p,
             m,
-            #[cfg(feature = "optimized")]
-            registers: PackedRegisters::new(p, 6), // 6 bits per register for HLL
-            #[cfg(not(feature = "optimized"))]
             registers: vec![0; m],
         }
     }
@@ -63,56 +52,12 @@ impl HllSketch {
         let leading = w.leading_zeros().saturating_add(1);
         let rank = leading.min(64) as u8;
 
-        #[cfg(feature = "optimized")]
-        self.registers.update_max(idx, rank);
-
-        #[cfg(not(feature = "optimized"))]
         if self.registers[idx] < rank {
             self.registers[idx] = rank;
         }
     }
 
-    /// Batch update the sketch with multiple items for better performance.
-    #[cfg(feature = "optimized")]
-    pub fn update_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
-        use rayon::prelude::*;
-
-        // Parallel hashing with rayon for large batches
-        let hashes: Vec<u64> = if items.len() > 10000 {
-            items
-                .par_iter()
-                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
-                .collect()
-        } else {
-            items
-                .iter()
-                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
-                .collect()
-        };
-
-        // Use SIMD for leading zeros computation when available
-        let w_values: Vec<u64> = hashes.iter().map(|&hash| hash << self.p).collect();
-        let leading_zeros = hyperloglog::leading_zeros_batch(&w_values);
-
-        // Parallel computation of positions and ranks
-        let updates: Vec<(usize, u8)> = hashes
-            .par_iter()
-            .zip(leading_zeros.par_iter())
-            .map(|(&hash, &lz)| {
-                let idx = (hash >> (64 - self.p)) as usize;
-                let rank = (lz.saturating_add(1)).min(64) as u8;
-                (idx, rank)
-            })
-            .collect();
-
-        // Apply updates with branch-free operations
-        for (pos, rank) in updates {
-            self.registers.update_max(pos, rank);
-        }
-    }
-
-    /// Batch update fallback for non-optimized builds.
-    #[cfg(not(feature = "optimized"))]
+    /// Batch update the sketch with multiple items.
     pub fn update_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.update(item);
@@ -125,23 +70,10 @@ impl HllSketch {
         let mut sum = 0f64;
         let mut zeros = 0usize;
 
-        #[cfg(feature = "optimized")]
-        {
-            for reg in self.registers.iter() {
-                sum += 2f64.powf(-(reg as f64));
-                if reg == 0 {
-                    zeros += 1;
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for &reg in &self.registers {
-                sum += 2f64.powf(-(reg as f64));
-                if reg == 0 {
-                    zeros += 1;
-                }
+        for &reg in &self.registers {
+            sum += 2f64.powf(-(reg as f64));
+            if reg == 0 {
+                zeros += 1;
             }
         }
 
@@ -169,38 +101,16 @@ impl HllSketch {
             );
         }
 
-        #[cfg(feature = "optimized")]
-        {
-            for i in 0..self.m {
-                let self_val = self.registers.get(i);
-                let other_val = other.registers.get(i);
-                if self_val < other_val {
-                    self.registers.set(i, other_val);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for i in 0..self.m {
-                if self.registers[i] < other.registers[i] {
-                    self.registers[i] = other.registers[i];
-                }
+        for i in 0..self.m {
+            if self.registers[i] < other.registers[i] {
+                self.registers[i] = other.registers[i];
             }
         }
     }
 
     /// Serialize registers to bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.iter().collect()
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers.clone()
-        }
+        self.registers.clone()
     }
 
     /// Get the precision parameter p.
@@ -215,48 +125,19 @@ impl HllSketch {
 
     /// Get the register value at the given index.
     pub fn register_value(&self, idx: usize) -> u8 {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.get(idx)
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers[idx]
-        }
+        self.registers[idx]
     }
 
     /// Create an HllSketch from raw register bytes and precision p.
     pub fn from_registers(p: u8, registers: Vec<u8>) -> Self {
         let m = 1 << p;
         assert_eq!(registers.len(), m, "Register count must equal 2^p");
-        HllSketch {
-            p,
-            m,
-            #[cfg(feature = "optimized")]
-            registers: {
-                let mut packed = PackedRegisters::new(p, 6);
-                for (i, &val) in registers.iter().enumerate() {
-                    packed.set(i, val);
-                }
-                packed
-            },
-            #[cfg(not(feature = "optimized"))]
-            registers,
-        }
+        HllSketch { p, m, registers }
     }
 
     /// Get memory usage in bytes.
     pub fn memory_usage(&self) -> usize {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.memory_usage() + std::mem::size_of::<Self>()
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers.len() + std::mem::size_of::<Self>()
-        }
+        self.registers.len() + std::mem::size_of::<Self>()
     }
 }
 
@@ -265,9 +146,6 @@ impl HllSketch {
 pub struct HllPlusPlusSketch {
     p: u8,
     m: usize,
-    #[cfg(feature = "optimized")]
-    registers: PackedRegisters,
-    #[cfg(not(feature = "optimized"))]
     registers: Vec<u8>,
 }
 
@@ -283,9 +161,6 @@ impl HllPlusPlusSketch {
         HllPlusPlusSketch {
             p,
             m,
-            #[cfg(feature = "optimized")]
-            registers: PackedRegisters::new(p, 6), // 6 bits per register for HLL++
-            #[cfg(not(feature = "optimized"))]
             registers: vec![0; m],
         }
     }
@@ -298,15 +173,9 @@ impl HllPlusPlusSketch {
         let leading = w.leading_zeros().saturating_add(1);
         let rank = leading.min(64) as u8;
 
-        #[cfg(feature = "optimized")]
-        self.registers.update_max(idx, rank);
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            let reg = &mut self.registers[idx];
-            if *reg < rank {
-                *reg = rank;
-            }
+        let reg = &mut self.registers[idx];
+        if *reg < rank {
+            *reg = rank;
         }
     }
 
@@ -319,23 +188,10 @@ impl HllPlusPlusSketch {
         let mut sum = 0f64;
         let mut zeros = 0usize;
 
-        #[cfg(feature = "optimized")]
-        {
-            for reg in self.registers.iter() {
-                sum += 2f64.powf(-(reg as f64));
-                if reg == 0 {
-                    zeros += 1;
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for &reg in &self.registers {
-                sum += 2f64.powf(-(reg as f64));
-                if reg == 0 {
-                    zeros += 1;
-                }
+        for &reg in &self.registers {
+            sum += 2f64.powf(-(reg as f64));
+            if reg == 0 {
+                zeros += 1;
             }
         }
         let alpha = match self.m {
@@ -381,68 +237,14 @@ impl HllPlusPlusSketch {
             "Cannot merge sketches with different precision"
         );
 
-        #[cfg(feature = "optimized")]
-        {
-            for i in 0..self.m {
-                let self_val = self.registers.get(i);
-                let other_val = other.registers.get(i);
-                if self_val < other_val {
-                    self.registers.set(i, other_val);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for (r, o) in self.registers.iter_mut().zip(other.registers.iter()) {
-                if *r < *o {
-                    *r = *o;
-                }
+        for (r, o) in self.registers.iter_mut().zip(other.registers.iter()) {
+            if *r < *o {
+                *r = *o;
             }
         }
     }
 
-    /// Batch update the sketch with multiple items for better performance.
-    #[cfg(feature = "optimized")]
-    pub fn update_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
-        use rayon::prelude::*;
-
-        // Parallel hashing with rayon for large batches
-        let hashes: Vec<u64> = if items.len() > 10000 {
-            items
-                .par_iter()
-                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
-                .collect()
-        } else {
-            items
-                .iter()
-                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
-                .collect()
-        };
-
-        // Use SIMD for leading zeros computation when available
-        let w_values: Vec<u64> = hashes.iter().map(|&hash| hash << self.p).collect();
-        let leading_zeros = hyperloglog::leading_zeros_batch(&w_values);
-
-        // Parallel computation of positions and ranks
-        let updates: Vec<(usize, u8)> = hashes
-            .par_iter()
-            .zip(leading_zeros.par_iter())
-            .map(|(&hash, &lz)| {
-                let idx = (hash >> (64 - self.p)) as usize;
-                let rank = (lz.saturating_add(1)).min(64) as u8;
-                (idx, rank)
-            })
-            .collect();
-
-        // Apply updates with branch-free operations
-        for (pos, rank) in updates {
-            self.registers.update_max(pos, rank);
-        }
-    }
-
-    /// Batch update fallback for non-optimized builds.
-    #[cfg(not(feature = "optimized"))]
+    /// Batch update the sketch with multiple items.
     pub fn update_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.update(item);
@@ -451,15 +253,7 @@ impl HllPlusPlusSketch {
 
     /// Serialize registers to bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.iter().collect()
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers.clone()
-        }
+        self.registers.clone()
     }
 
     /// Get the precision parameter p.
@@ -474,15 +268,7 @@ impl HllPlusPlusSketch {
 
     /// Get the register value at the given index.
     pub fn register_value(&self, idx: usize) -> u8 {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.get(idx)
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers[idx]
-        }
+        self.registers[idx]
     }
 
     /// Create an HllPlusPlusSketch from raw register bytes and precision p.
@@ -493,33 +279,12 @@ impl HllPlusPlusSketch {
         );
         let m = 1 << p;
         assert_eq!(registers.len(), m, "Register count must equal 2^p");
-        HllPlusPlusSketch {
-            p,
-            m,
-            #[cfg(feature = "optimized")]
-            registers: {
-                let mut packed = PackedRegisters::new(p, 6);
-                for (i, &val) in registers.iter().enumerate() {
-                    packed.set(i, val);
-                }
-                packed
-            },
-            #[cfg(not(feature = "optimized"))]
-            registers,
-        }
+        HllPlusPlusSketch { p, m, registers }
     }
 
     /// Get memory usage in bytes.
     pub fn memory_usage(&self) -> usize {
-        #[cfg(feature = "optimized")]
-        {
-            self.registers.memory_usage() + std::mem::size_of::<Self>()
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            self.registers.len() + std::mem::size_of::<Self>()
-        }
+        self.registers.len() + std::mem::size_of::<Self>()
     }
 }
 
@@ -527,9 +292,6 @@ impl HllPlusPlusSketch {
 pub struct HllPlusPlusSparseSketch {
     p: u8,
     m: usize,
-    #[cfg(feature = "optimized")]
-    map: CompactHashTable<u8>,
-    #[cfg(not(feature = "optimized"))]
     map: BTreeMap<usize, u8>,
 }
 
@@ -544,9 +306,6 @@ impl HllPlusPlusSparseSketch {
         HllPlusPlusSparseSketch {
             p,
             m,
-            #[cfg(feature = "optimized")]
-            map: CompactHashTable::new(64), // Start with small capacity
-            #[cfg(not(feature = "optimized"))]
             map: BTreeMap::new(),
         }
     }
@@ -558,23 +317,9 @@ impl HllPlusPlusSparseSketch {
         let w = hash << self.p;
         let rank = w.leading_zeros().saturating_add(1).min(64) as u8;
 
-        #[cfg(feature = "optimized")]
-        {
-            if let Some(current) = self.map.get_mut(idx as u64) {
-                if *current < rank {
-                    *current = rank;
-                }
-            } else {
-                self.map.insert(idx as u64, rank);
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            let entry = self.map.entry(idx).or_insert(0);
-            if *entry < rank {
-                *entry = rank;
-            }
+        let entry = self.map.entry(idx).or_insert(0);
+        if *entry < rank {
+            *entry = rank;
         }
     }
 
@@ -583,10 +328,6 @@ impl HllPlusPlusSparseSketch {
         let m_f = self.m as f64;
         let zeros = self.m - self.map.len();
 
-        #[cfg(feature = "optimized")]
-        let sum_nonzero: f64 = self.map.iter().map(|(_, r)| 2f64.powf(-(*r as f64))).sum();
-
-        #[cfg(not(feature = "optimized"))]
         let sum_nonzero: f64 = self.map.values().map(|&r| 2f64.powf(-(r as f64))).sum();
 
         let sum = sum_nonzero + zeros as f64 * 1.0;
@@ -618,26 +359,10 @@ impl HllPlusPlusSparseSketch {
             "Cannot merge sketches with different precision"
         );
 
-        #[cfg(feature = "optimized")]
-        {
-            for (idx, &r) in other.map.iter() {
-                if let Some(current) = self.map.get_mut(idx) {
-                    if *current < r {
-                        *current = r;
-                    }
-                } else {
-                    self.map.insert(idx, r);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for (&idx, &r) in other.map.iter() {
-                let entry = self.map.entry(idx).or_insert(0);
-                if *entry < r {
-                    *entry = r;
-                }
+        for (&idx, &r) in other.map.iter() {
+            let entry = self.map.entry(idx).or_insert(0);
+            if *entry < r {
+                *entry = r;
             }
         }
     }
@@ -645,39 +370,17 @@ impl HllPlusPlusSparseSketch {
     /// Serialize to dense byte vector.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut regs = vec![0; self.m];
-
-        #[cfg(feature = "optimized")]
-        {
-            for (idx, &r) in self.map.iter() {
-                if (idx as usize) < self.m {
-                    regs[idx as usize] = r;
-                }
-            }
+        for (&idx, &r) in self.map.iter() {
+            regs[idx] = r;
         }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for (&idx, &r) in self.map.iter() {
-                regs[idx] = r;
-            }
-        }
-
         regs
     }
 
     /// Get memory usage in bytes.
     pub fn memory_usage(&self) -> usize {
-        #[cfg(feature = "optimized")]
-        {
-            self.map.memory_usage() + std::mem::size_of::<Self>()
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            // BTreeMap overhead: ~24-32 bytes per entry + data
-            self.map.len() * (std::mem::size_of::<usize>() + std::mem::size_of::<u8>() + 24)
-                + std::mem::size_of::<Self>()
-        }
+        // BTreeMap overhead: ~24-32 bytes per entry + data
+        self.map.len() * (std::mem::size_of::<usize>() + std::mem::size_of::<u8>() + 24)
+            + std::mem::size_of::<Self>()
     }
 }
 
@@ -750,9 +453,6 @@ impl AdaptiveHllPlusPlus {
                 }
             }
             HllRepresentation::Dense(dense) => {
-                #[cfg(feature = "optimized")]
-                dense.update_batch(items);
-                #[cfg(not(feature = "optimized"))]
                 for item in items {
                     dense.update(item);
                 }
@@ -766,10 +466,6 @@ impl AdaptiveHllPlusPlus {
             let sparse_memory = sparse.memory_usage();
 
             // Estimate dense memory usage (approximate)
-            #[cfg(feature = "optimized")]
-            let dense_memory = (self.m * 6) / 8 + std::mem::size_of::<HllPlusPlusSketch>(); // 6-bit packed
-
-            #[cfg(not(feature = "optimized"))]
             let dense_memory = self.m + std::mem::size_of::<HllPlusPlusSketch>(); // 8-bit unpacked
 
             if sparse_memory as f64 > self.sparse_threshold_ratio * dense_memory as f64 {
@@ -787,12 +483,7 @@ impl AdaptiveHllPlusPlus {
             let sparse_bytes = sparse.to_bytes();
             for (idx, &value) in sparse_bytes.iter().enumerate() {
                 if value > 0 {
-                    #[cfg(feature = "optimized")]
-                    dense.registers.set(idx, value);
-                    #[cfg(not(feature = "optimized"))]
-                    {
-                        dense.registers[idx] = value;
-                    }
+                    dense.registers[idx] = value;
                 }
             }
 
@@ -825,12 +516,7 @@ impl AdaptiveHllPlusPlus {
 
                 for (idx, &value) in other_bytes.iter().enumerate() {
                     if value > 0 {
-                        #[cfg(feature = "optimized")]
-                        other_dense.registers.set(idx, value);
-                        #[cfg(not(feature = "optimized"))]
-                        {
-                            other_dense.registers[idx] = value;
-                        }
+                        other_dense.registers[idx] = value;
                     }
                 }
 

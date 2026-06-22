@@ -16,14 +16,6 @@
 //!
 //! Rust library (`rlib`) with optional Python bindings via PyO3 (`cdylib`).
 
-// Performance optimization setup
-#[cfg(feature = "optimized")]
-use jemallocator::Jemalloc;
-
-#[cfg(feature = "optimized")]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 #[cfg(feature = "extension-module")]
 use pyo3::PyObject;
 #[cfg(feature = "extension-module")]
@@ -49,12 +41,6 @@ pub mod varopt;
 pub mod codec;
 pub mod hash;
 pub mod serialization;
-
-// Performance optimization modules
-#[cfg(feature = "optimized")]
-pub mod compact_memory;
-#[cfg(feature = "optimized")]
-pub mod simd_ops;
 
 /// Python binding for CPC sketch.
 #[cfg(feature = "extension-module")]
@@ -118,43 +104,6 @@ impl HllSketch {
     /// Update the sketch with a string item.
     pub fn update(&mut self, item: &str) -> PyResult<()> {
         self.inner.update(&item);
-        Ok(())
-    }
-
-    /// Batch update with multiple items (optimized for Python).
-    #[cfg(feature = "optimized")]
-    pub fn update_batch(&mut self, py: Python, items: Vec<&str>) -> PyResult<()> {
-        // Release GIL for CPU-intensive work
-        py.allow_threads(|| {
-            self.inner.update_batch(&items);
-        })?;
-        Ok(())
-    }
-
-    /// Update from numpy array or bytes buffer (zero-copy when possible).
-    #[cfg(feature = "optimized")]
-    pub fn update_from_buffer(&mut self, py: Python, buffer: &PyAny) -> PyResult<()> {
-        // Try to get buffer interface for zero-copy access
-        if let Ok(buffer_info) = buffer.extract::<pyo3::buffer::PyBuffer<u8>>() {
-            let data = unsafe { buffer_info.as_slice(py)? };
-
-            // Release GIL for processing
-            py.allow_threads(|| {
-                // Process data in chunks
-                for chunk in data.chunks(8) {
-                    self.inner.update(&chunk);
-                }
-            })?;
-        } else {
-            // Fallback to string conversion
-            let items: Vec<String> = buffer.extract()?;
-            let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
-
-            py.allow_threads(|| {
-                self.inner.update_batch(&item_refs);
-            })?;
-        }
-
         Ok(())
     }
 

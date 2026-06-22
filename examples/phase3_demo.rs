@@ -56,22 +56,11 @@ fn batch_processing_demo() {
     let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
     let start = Instant::now();
-    #[cfg(feature = "optimized")]
     hll_batch.update_batch(&item_refs);
-    #[cfg(not(feature = "optimized"))]
-    for item in &item_refs {
-        hll_batch.update(item);
-    }
     let batch_time = start.elapsed();
 
     println!("Individual updates: {individual_time:.2?}");
     println!("Batch updates: {batch_time:.2?}");
-
-    #[cfg(feature = "optimized")]
-    if individual_time > batch_time {
-        let speedup = individual_time.as_nanos() as f64 / batch_time.as_nanos() as f64;
-        println!("Batch processing speedup: {:.2}x", speedup);
-    }
 
     println!(
         "Both estimates: {:.0} vs {:.0}",

@@ -25,12 +25,7 @@
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
-#[cfg(feature = "optimized")]
-use crate::simd_ops::bloom;
-#[cfg(feature = "optimized")]
-use rayon::prelude::*;
-
-/// Standard Bloom Filter implementation with optional SIMD optimizations
+/// Standard Bloom Filter implementation
 pub struct BloomFilter {
     bit_array: Vec<u64>,
     num_bits: usize,
@@ -145,105 +140,32 @@ impl BloomFilter {
         true
     }
 
-    /// Set bits using SIMD operations when available
+    /// Set bits using scalar operations (SIMD path removed)
     fn set_bits_simd(&mut self, positions: &[usize]) {
-        #[cfg(feature = "optimized")]
-        {
-            bloom::set_bits(&mut self.bit_array, positions);
-        }
-
-        #[cfg(not(feature = "optimized"))]
         self.set_bits_scalar(positions);
     }
 
-    /// Check bits using SIMD operations when available
+    /// Check bits using scalar operations (SIMD path removed)
     fn check_bits_simd(&self, positions: &[usize]) -> bool {
-        #[cfg(feature = "optimized")]
-        {
-            let results = bloom::check_bits(&self.bit_array, positions);
-            results.iter().all(|&x| x)
-        }
-
-        #[cfg(not(feature = "optimized"))]
         self.check_bits_scalar(positions)
     }
 
-    /// Batch add multiple elements for better performance
-    #[cfg(feature = "optimized")]
-    pub fn add_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
-        // Use parallel processing for large batches
-        let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
-            items.par_iter().map(|item| self.hash_item(item)).collect()
-        } else {
-            items.iter().map(|item| self.hash_item(item)).collect()
-        };
-
-        // Flatten all positions for SIMD processing
-        let flat_positions: Vec<usize> = all_positions.into_iter().flatten().collect();
-
-        // Use SIMD operations for setting bits
-        if self.use_simd && flat_positions.len() >= 16 {
-            bloom::set_bits(&mut self.bit_array, &flat_positions);
-        } else {
-            self.set_bits_scalar(&flat_positions);
-        }
-    }
-
-    /// Batch add fallback for non-optimized builds
-    #[cfg(not(feature = "optimized"))]
+    /// Batch add multiple elements
     pub fn add_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.add(item);
         }
     }
 
-    /// Batch check multiple elements for better performance
-    #[cfg(feature = "optimized")]
-    pub fn contains_batch<T: Hashable + Sync>(&self, items: &[T]) -> Vec<bool> {
-        // Use parallel processing for large batches
-        let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
-            items.par_iter().map(|item| self.hash_item(item)).collect()
-        } else {
-            items.iter().map(|item| self.hash_item(item)).collect()
-        };
-
-        // Check each item's positions
-        all_positions
-            .into_iter()
-            .map(|positions| {
-                if self.use_simd && positions.len() >= 4 {
-                    let results = bloom::check_bits(&self.bit_array, &positions);
-                    results.iter().all(|&x| x)
-                } else {
-                    self.check_bits_scalar(&positions)
-                }
-            })
-            .collect()
-    }
-
-    /// Batch check fallback for non-optimized builds
-    #[cfg(not(feature = "optimized"))]
+    /// Batch check multiple elements
     pub fn contains_batch<T: Hashable>(&self, items: &[T]) -> Vec<bool> {
         items.iter().map(|item| self.contains(item)).collect()
     }
 
     /// Clear the filter
     pub fn clear(&mut self) {
-        #[cfg(feature = "optimized")]
-        {
-            // Use parallel clearing for large filters
-            if self.bit_array.len() > 1000 {
-                self.bit_array.par_iter_mut().for_each(|chunk| *chunk = 0);
-            } else {
-                self.bit_array.fill(0);
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for chunk in &mut self.bit_array {
-                *chunk = 0;
-            }
+        for chunk in &mut self.bit_array {
+            *chunk = 0;
         }
     }
 
