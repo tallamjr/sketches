@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Accuracy gate: hard-fail on accuracy regression against the deterministic
+  # synthetic dataset (exact ground truth = n). The perf comparison report and
+  # plots are tracked as an artifact but are NOT gated.
+  # ---------------------------------------------------------------------------
+  accuracy-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install plotting dependencies
+        run: pip install matplotlib
+
+      - name: Run our sketches over the synthetic dataset
+        run: |
+          cd benchmarks/runner-ours
+          cargo run --release -- --n 1000000 --out ../results/ours.csv
+
+      # This is the gate: report.py exits 1 on any per-sketch threshold breach.
+      - name: Accuracy hard gate
+        run: |
+          python benchmarks/reporter/report.py \
+            --check-accuracy benchmarks/reporter/thresholds.json \
+            benchmarks/results/ours.csv
+
+      # Non-gating: render the comparison report and plots for the artifact.
+      # Committed baseline CSVs are included when present; their absence must
+      # not break this step.
+      - name: Generate comparison report and plots
+        run: |
+          csvs="benchmarks/results/ours.csv"
+          for f in benchmarks/results/apache-rust.baseline.csv \
+                   benchmarks/results/cpp.baseline.csv; do
+            if [ -f "$f" ]; then
+              csvs="$csvs $f"
+            fi
+          done
+          echo "comparing: $csvs"
+          python benchmarks/reporter/report.py \
+            --md benchmarks/results/report.md $csvs
+          CSVS="$csvs" python -c 'import os, sys; sys.path.insert(0, "benchmarks/reporter"); import plots, report; print(plots.render_plots(report.load_rows(os.environ["CSVS"].split()), "benchmarks/results/plots"))'
+
+      - name: Upload benchmark report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: benchmarks/results/
