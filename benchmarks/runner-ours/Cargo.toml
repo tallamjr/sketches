@@ -1,0 +1,21 @@
+[package]
+name = "runner-ours"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone crate: the repo root is not a Cargo workspace, so declare an
+# empty workspace table to stop Cargo walking upwards and treating the parent
+# directories as a workspace root.
+[workspace]
+
+[dependencies]
+sketches = { path = "../.." }
+datasets = { path = "../datasets" }
+
+[lib]
+name = "runner_ours"
+path = "src/lib.rs"
+
+[[bin]]
+name = "runner-ours"
+path = "src/main.rs"
