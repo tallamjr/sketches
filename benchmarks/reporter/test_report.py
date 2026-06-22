@@ -40,6 +40,8 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
     assert "2.000 (ours)" in table
     # A bytes ratio 128/144 ~ 0.889 with 'ours' better (lower bytes).
     assert "0.889 (ours)" in table
+    # The attribution note explains throughput differences via hash choice.
+    assert "xxh3" in table
 
 
 def test_check_accuracy_fails_when_over_threshold(tmp_path):

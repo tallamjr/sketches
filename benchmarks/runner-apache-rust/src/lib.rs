@@ -216,11 +216,15 @@ pub fn run_tpch(
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let values = tpch_column(path, col).map_err(Box::new)?;
     let exact = exact_distinct(values.iter().cloned()) as f64;
+    // Pass borrowed `&str` views so the per-item `clone()` inside each timed
+    // helper loop is a cheap Copy of the reference, not a String heap
+    // allocation. The bytes hashed are identical to passing the owned String.
+    let refs: Vec<&str> = values.iter().map(|s| s.as_str()).collect();
 
     Ok(vec![
-        hll_row(dataset, &values, exact),
-        theta_row(dataset, &values, exact),
-        bloom_row(dataset, &values),
-        countmin_row(dataset, &values),
+        hll_row(dataset, &refs, exact),
+        theta_row(dataset, &refs, exact),
+        bloom_row(dataset, &refs),
+        countmin_row(dataset, &refs),
     ])
 }

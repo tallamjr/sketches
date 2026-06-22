@@ -170,6 +170,18 @@ def render_table(rows):
         ]
         lines.append("| " + " | ".join(cells) + " |")
 
+    lines.append("")
+    lines.append("**Notes**")
+    lines.append("")
+    lines.append(
+        "> Throughput differences are dominated by hash-function choice: this "
+        "crate uses xxh3 while Apache (Rust and C++) use MurmurHash3 x64 128, "
+        "and HLL/Theta update is hash-bound. Absolute multiples are "
+        "machine-dependent; treat them as directional, not precise. The "
+        "TPC-H/string comparison passes borrowed string slices to every "
+        "implementation so no runner pays an extra per-item allocation."
+    )
+
     return "\n".join(lines) + "\n"
 
 
