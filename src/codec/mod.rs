@@ -13,6 +13,7 @@ pub enum Family {
     Kll = 3,
     Bloom = 4,
     CountMin = 5,
+    Cpc = 6,
 }
 
 impl Family {
@@ -23,6 +24,7 @@ impl Family {
             3 => Ok(Family::Kll),
             4 => Ok(Family::Bloom),
             5 => Ok(Family::CountMin),
+            6 => Ok(Family::Cpc),
             other => Err(CodecError::UnknownFamily(other)),
         }
     }

@@ -463,7 +463,6 @@ impl Serializable for ThetaSketch {
 // ---------------------------------------------------------------------------
 
 const CPC_SERIAL_VERSION: u8 = 1;
-const CPC_FLAG_HAS_TABLE: u8 = 1 << 2;
 
 // ---------------------------------------------------------------------------
 // CpcSketch serialisation
@@ -471,111 +470,15 @@ const CPC_FLAG_HAS_TABLE: u8 = 1 << 2;
 
 impl Serializable for CpcSketch {
     fn to_bytes(&self) -> Vec<u8> {
-        // Use the DataSketches preamble followed by the CPC native
-        // serialisation payload. This allows faithful round-tripping
-        // since the native format preserves all internal state.
-        let native_bytes = self.to_bytes(); // inherent method
-
-        let is_empty = self.is_empty();
-        let preamble_ints: u8 = 2;
-
-        let mut buf = Vec::with_capacity(16 + native_bytes.len());
-
-        // DataSketches preamble (16 bytes = 2 longs)
-        buf.push(preamble_ints); // byte 0
-        buf.push(CPC_SERIAL_VERSION); // byte 1
-        buf.push(FAMILY_CPC); // byte 2
-        buf.push(self.lg_k()); // byte 3
-        buf.push(self.first_interesting_col()); // byte 4
-        buf.push(if is_empty { 0 } else { CPC_FLAG_HAS_TABLE }); // byte 5: flags
-        buf.extend_from_slice(&THETA_SEED_HASH.to_le_bytes()); // bytes 6-7
-
-        if !is_empty {
-            buf.extend_from_slice(&self.num_coupons().to_le_bytes()); // bytes 8-11
-            // Length of native payload
-            buf.extend_from_slice(&(native_bytes.len() as u32).to_le_bytes()); // bytes 12-15
-        } else {
-            buf.extend_from_slice(&[0u8; 8]); // bytes 8-15: padding
-        }
-
-        // Native CPC payload
-        buf.extend_from_slice(&native_bytes);
-
-        buf
+        // Delegate to the inherent codec serialisation, which writes the full
+        // raw (uncompressed) state behind a Family::Cpc header.
+        CpcSketch::to_bytes(self)
     }
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
-        if bytes.len() < 8 {
-            return Err(SerializationError::InsufficientData {
-                needed: 8,
-                available: bytes.len(),
-            });
-        }
-
-        let _preamble_ints = bytes[0];
-        let serial_version = bytes[1];
-        let family_id = bytes[2];
-        let lg_k = bytes[3];
-        let _first_interesting_column = bytes[4];
-        let _flags = bytes[5];
-
-        if serial_version != CPC_SERIAL_VERSION {
-            return Err(SerializationError::VersionMismatch {
-                expected: CPC_SERIAL_VERSION,
-                found: serial_version,
-            });
-        }
-
-        if family_id != FAMILY_CPC {
-            return Err(SerializationError::FamilyMismatch {
-                expected: FAMILY_CPC,
-                found: family_id,
-            });
-        }
-
-        if !(4..=26).contains(&lg_k) {
-            return Err(SerializationError::CorruptData(format!(
-                "lg_k={lg_k} out of valid range [4, 26]"
-            )));
-        }
-
-        if bytes.len() < 16 {
-            return Err(SerializationError::InsufficientData {
-                needed: 16,
-                available: bytes.len(),
-            });
-        }
-
-        let _num_coupons = u32::from_le_bytes(
-            bytes[8..12]
-                .try_into()
-                .map_err(|_| SerializationError::CorruptData("invalid num_coupons".to_string()))?,
-        );
-
-        let native_len =
-            u32::from_le_bytes(bytes[12..16].try_into().map_err(|_| {
-                SerializationError::CorruptData("invalid native length".to_string())
-            })?) as usize;
-
-        // If native_len is 0 and num_coupons is 0, this is an empty sketch
-        if _num_coupons == 0 && native_len == 0 {
-            return Ok(CpcSketch::new(lg_k));
-        }
-
-        let native_start = 16;
-        let total_needed = native_start + native_len;
-        if bytes.len() < total_needed {
-            return Err(SerializationError::InsufficientData {
-                needed: total_needed,
-                available: bytes.len(),
-            });
-        }
-
-        let native_bytes = &bytes[native_start..native_start + native_len];
-
-        CpcSketch::from_native_bytes(native_bytes).map_err(|msg| {
-            SerializationError::CorruptData(format!("CPC native reconstruction failed: {msg}"))
-        })
+        // The inherent codec deserialisation reconstructs every field exactly;
+        // CodecError maps to SerializationError via the existing From impl.
+        Ok(CpcSketch::from_bytes(bytes)?)
     }
 
     fn family_id(&self) -> u8 {
@@ -1176,13 +1079,21 @@ mod tests {
         let restored = <CpcSketch as Serializable>::from_bytes(&bytes).unwrap();
 
         let restored_estimate = restored.estimate();
-        // CPC reconstruction via coupon replay is approximate due to HIP
-        // re-computation, but structural content should be very close.
-        let error_ratio =
-            (original_estimate - restored_estimate).abs() / original_estimate.max(1.0);
+        // Serialisation now stores the full raw state, so reconstruction is
+        // exact: the estimate, coupon count, and bit-matrix invariant must all
+        // be preserved precisely.
         assert!(
-            error_ratio < 0.15,
-            "CPC roundtrip estimate mismatch: {original_estimate:.1} vs {restored_estimate:.1} (error {error_ratio:.2})"
+            (original_estimate - restored_estimate).abs() < 1e-6,
+            "CPC roundtrip estimate mismatch: {original_estimate:.6} vs {restored_estimate:.6}"
+        );
+        assert_eq!(
+            restored.num_coupons(),
+            sketch.num_coupons(),
+            "CPC roundtrip must preserve coupon count"
+        );
+        assert!(
+            restored.validate(),
+            "restored CPC sketch must satisfy the bit-matrix invariant"
         );
     }
 
@@ -1193,9 +1104,13 @@ mod tests {
 
         let bytes = Serializable::to_bytes(&sketch);
 
-        assert_eq!(bytes[1], CPC_SERIAL_VERSION, "serial_version");
-        assert_eq!(bytes[2], FAMILY_CPC, "family_id");
-        assert_eq!(bytes[3], 10, "lg_k");
+        // Codec header: MAGIC[0], MAGIC[1], family (6=Cpc), version, flags
+        assert_eq!(bytes[0], 0x53, "MAGIC[0]");
+        assert_eq!(bytes[1], 0x4B, "MAGIC[1]");
+        assert_eq!(bytes[2], Family::Cpc as u8, "codec family");
+        assert_eq!(bytes[3], CPC_SERIAL_VERSION, "codec version");
+        // lg_k is the first payload byte after the 5-byte header.
+        assert_eq!(bytes[5], 10, "lg_k");
     }
 
     #[test]
@@ -1203,8 +1118,8 @@ mod tests {
         let sketch = CpcSketch::new(11);
         let bytes = Serializable::to_bytes(&sketch);
 
-        assert_eq!(bytes[0], 2, "preamble_ints for empty");
-        assert_eq!(bytes[2], FAMILY_CPC);
+        assert_eq!(&bytes[0..2], &[0x53, 0x4B], "MAGIC");
+        assert_eq!(bytes[2], Family::Cpc as u8, "codec family");
 
         let restored = <CpcSketch as Serializable>::from_bytes(&bytes).unwrap();
         assert!(restored.is_empty());
@@ -1254,16 +1169,13 @@ mod tests {
     fn test_cpc_corrupted_family_id() {
         let sketch = CpcSketch::new(11);
         let mut bytes = Serializable::to_bytes(&sketch);
-        bytes[2] = FAMILY_KLL;
+        // In codec format bytes[2] is the family byte (Family::Cpc = 6).
+        // Changing it to another known family (Theta) causes WrongFamily,
+        // which maps to CorruptData.
+        bytes[2] = Family::Theta as u8;
 
         let result = <CpcSketch as Serializable>::from_bytes(&bytes);
-        assert!(result.is_err());
-        if let Err(SerializationError::FamilyMismatch { expected, found }) = result {
-            assert_eq!(expected, FAMILY_CPC);
-            assert_eq!(found, FAMILY_KLL);
-        } else {
-            panic!("Expected FamilyMismatch error");
-        }
+        assert!(result.is_err(), "corrupted family byte must be rejected");
     }
 
     #[test]

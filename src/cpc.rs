@@ -24,6 +24,7 @@
 //! - Use CPC when network transfer cost or storage size is the primary concern.
 //! - Use HLL when simplicity and merge performance matter more.
 
+use crate::codec::{CodecError, Family, SketchHeader, SketchReader, SketchWriter};
 use crate::cpc_tables::{INVERSE_POWERS_OF_2, KXP_BYTE_TABLE};
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
@@ -34,6 +35,8 @@ const DEFAULT_LG_K: u8 = 11;
 const MIN_LG_K: u8 = 4;
 /// Maximum allowed lg_k.
 const MAX_LG_K: u8 = 26;
+/// Serial format version for the codec serialisation of CPC.
+const CPC_SERIAL_VERSION: u8 = 1;
 
 /// The five flavour states of a CPC sketch, representing different
 /// compression modes as cardinality grows. Boundaries are expressed in terms
@@ -668,61 +671,96 @@ impl CpcSketch {
         *self = union.to_sketch();
     }
 
-    /// Serialise the sketch to bytes.
+    /// Serialise the sketch to bytes using the shared codec format.
     ///
-    /// NOTE: Faithful (de)serialisation is implemented in Task 5. This is a
-    /// compiling placeholder used only to keep the existing `Serializable`
-    /// impl and PyO3 wrapper building; it is not the final wire format.
+    /// Writes the full raw (uncompressed) state: a [`SketchHeader`] tagged
+    /// [`Family::Cpc`] followed by the scalars, the length-prefixed sliding
+    /// window, and every populated entry of the surprising-value table. The
+    /// resulting bytes reconstruct an identical sketch via
+    /// [`from_bytes`](Self::from_bytes); HIP state is stored directly rather
+    /// than recomputed by replay.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.push(self.lg_k);
-        bytes.push(self.first_interesting_column);
-        bytes.push(self.window_offset);
-        bytes.push(if self.merge_flag { 1 } else { 0 });
-        bytes.extend_from_slice(&self.num_coupons.to_le_bytes());
-        bytes.extend_from_slice(&self.kxp.to_le_bytes());
-        bytes.extend_from_slice(&self.hip_est_accum.to_le_bytes());
-        bytes
+        let mut w = SketchWriter::new();
+        SketchHeader {
+            family: Family::Cpc,
+            version: CPC_SERIAL_VERSION,
+            flags: 0,
+        }
+        .write(&mut w);
+
+        w.put_u8(self.lg_k);
+        w.put_u32_le(self.num_coupons);
+        w.put_u8(self.first_interesting_column);
+        w.put_u8(self.window_offset);
+        w.put_u8(u8::from(self.merge_flag));
+        w.put_f64_le(self.kxp);
+        w.put_f64_le(self.hip_est_accum);
+
+        // Sliding window: length-prefixed raw bytes.
+        w.put_u32_le(self.sliding_window.len() as u32);
+        w.put_bytes(&self.sliding_window);
+
+        // Surprising-value table: entry count then each populated row_col.
+        match &self.surprising_value_table {
+            Some(table) => {
+                w.put_u32_le(table.num_items);
+                for &row_col in table.slots() {
+                    if row_col != u32::MAX {
+                        w.put_u32_le(row_col);
+                    }
+                }
+            }
+            None => {
+                w.put_u32_le(0);
+            }
+        }
+
+        w.into_vec()
     }
 
-    /// Reconstruct a CPC sketch from the placeholder byte format produced by
+    /// Reconstruct a CPC sketch from the codec bytes produced by
     /// [`to_bytes`](Self::to_bytes).
     ///
-    /// NOTE: Faithful deserialisation is implemented in Task 5. This decodes
-    /// only the header written by the placeholder `to_bytes` (it does not
-    /// restore the window or surprising-value table) and exists solely to keep
-    /// the existing `Serializable` impl compiling.
-    pub fn from_native_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 24 {
-            return Err("Insufficient bytes for CPC header");
-        }
-        let lg_k = bytes[0];
-        if !(MIN_LG_K..=MAX_LG_K).contains(&lg_k) {
-            return Err("lg_k out of valid range");
-        }
-        let first_interesting_column = bytes[1];
-        let window_offset = bytes[2];
-        let merge_flag = bytes[3] != 0;
-        let num_coupons =
-            u32::from_le_bytes(bytes[4..8].try_into().map_err(|_| "invalid num_coupons")?);
-        let kxp = f64::from_le_bytes(bytes[8..16].try_into().map_err(|_| "invalid kxp")?);
-        let hip_est_accum = f64::from_le_bytes(
-            bytes[16..24]
-                .try_into()
-                .map_err(|_| "invalid hip_est_accum")?,
-        );
+    /// Restores every field exactly: scalars and HIP state are read verbatim,
+    /// the sliding window is copied, and the surprising-value table is rebuilt
+    /// by re-inserting each stored `row_col` into a fresh [`PairTable`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = SketchReader::new(bytes);
+        SketchHeader::read_expecting(&mut r, Family::Cpc)?;
+
+        let lg_k = r.get_u8()?;
+        let num_coupons = r.get_u32_le()?;
+        let first_interesting_column = r.get_u8()?;
+        let window_offset = r.get_u8()?;
+        let merge_flag = r.get_u8()? != 0;
+        let kxp = r.get_f64_le()?;
+        let hip_est_accum = r.get_f64_le()?;
+
+        let window_len = r.get_u32_le()? as usize;
+        let sliding_window = r.get_bytes(window_len)?.to_vec();
+
+        let table_entries = r.get_u32_le()? as usize;
+        let surprising_value_table = if num_coupons == 0 {
+            None
+        } else {
+            // The table is built with the same lg-size as a fresh sparse
+            // sketch (see `row_col_update`); `maybe_insert` grows it as needed
+            // while the stored entries are re-inserted.
+            let mut table = PairTable::new(2, 6 + lg_k);
+            for _ in 0..table_entries {
+                let row_col = r.get_u32_le()?;
+                table.maybe_insert(row_col);
+            }
+            Some(table)
+        };
 
         Ok(CpcSketch {
             lg_k,
             first_interesting_column,
             num_coupons,
-            surprising_value_table: if num_coupons == 0 {
-                None
-            } else {
-                Some(PairTable::new(2, 6 + lg_k))
-            },
+            surprising_value_table,
             window_offset,
-            sliding_window: Vec::new(),
+            sliding_window,
             merge_flag,
             kxp,
             hip_est_accum,

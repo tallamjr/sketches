@@ -69,3 +69,16 @@ fn cpc_merge_matches_combined_cardinality() {
     let e = rel_err(a.estimate(), 900_000.0);
     assert!(e < 0.03, "cpc merge rel_error {e}");
 }
+
+#[test]
+fn cpc_roundtrip_preserves_estimate_on_real_volume() {
+    let mut s = CpcSketch::new(12);
+    for i in 0u64..500_000 {
+        s.update(&i);
+    }
+    let bytes = s.to_bytes();
+    assert_eq!(&bytes[0..2], &[0x53, 0x4B]); // MAGIC
+    let back = CpcSketch::from_bytes(&bytes).unwrap();
+    assert!((s.estimate() - back.estimate()).abs() < 1e-6);
+    assert_eq!(s.num_coupons(), back.num_coupons());
+}
