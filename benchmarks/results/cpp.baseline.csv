@@ -1,0 +1,5 @@
+implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
+apache-cpp,hll,synthetic,distinct_count,1000000,208594075.928244,4136,990116.600737,1000000.000000,0.009883
+apache-cpp,theta,synthetic,distinct_count,1000000,285632676.378178,52504,1002714.745231,1000000.000000,0.002715
+apache-cpp,bloom,synthetic,build,1000000,72077266.830042,1198168,,,
+apache-cpp,countmin,synthetic,point_query,1001000,39268761.523675,81944,1461.000000,1000.000000,0.461000

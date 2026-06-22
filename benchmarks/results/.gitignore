@@ -1,4 +1,6 @@
-# Generated benchmark artefacts are not tracked; only the schema doc is.
+# Generated benchmark artefacts are not tracked; schema, baselines, and committed reference numbers are.
 *.csv
+!*.baseline.csv
 plots/
+report.md
 !schema.md
