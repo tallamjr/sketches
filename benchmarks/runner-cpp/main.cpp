@@ -24,6 +24,7 @@
 
 #include "hll.hpp"
 #include "theta_sketch.hpp"
+#include "cpc_sketch.hpp"
 #include "bloom_filter.hpp"
 #include "count_min.hpp"
 
@@ -40,6 +41,8 @@ const uint64_t HOT_KEY_COUNT = 1000;
 const uint8_t HLL_LG_K = 12;
 // Theta configuration matching runner-ours nominal entries (4096 = 2^12).
 const uint8_t THETA_LG_K = 12;
+// CPC configuration matching runner-ours (lg_k = 12).
+const uint8_t CPC_LG_K = 12;
 // Count-Min configuration matching runner-ours (5 hashes, 2048 buckets).
 const uint8_t COUNTMIN_NUM_HASHES = 5;
 const uint32_t COUNTMIN_NUM_BUCKETS = 2048;
@@ -94,6 +97,24 @@ std::string hll_row(const std::string& dataset, const std::vector<T>& items, dou
   const double rel_error = std::abs(estimate - exact) / exact;
   const uint32_t bytes = sketch.get_compact_serialization_bytes();
   return row("hll", dataset, "distinct_count", n, throughput(n, secs),
+             std::to_string(bytes), format_f64(estimate), format_f64(exact),
+             format_f64(rel_error));
+}
+
+// CPC distinct-count row. T is the item type fed to the sketch.
+template <typename T>
+std::string cpc_row(const std::string& dataset, const std::vector<T>& items, double exact) {
+  const uint64_t n = static_cast<uint64_t>(items.size());
+  datasketches::cpc_sketch sketch(CPC_LG_K);
+  const auto start = Clock::now();
+  for (const T& item : items) {
+    sketch.update(item);
+  }
+  const double secs = elapsed_secs(start);
+  const double estimate = sketch.get_estimate();
+  const double rel_error = std::abs(estimate - exact) / exact;
+  const size_t bytes = sketch.serialize().size();
+  return row("cpc", dataset, "distinct_count", n, throughput(n, secs),
              std::to_string(bytes), format_f64(estimate), format_f64(exact),
              format_f64(rel_error));
 }
@@ -324,6 +345,7 @@ int main(int argc, char** argv) {
     }
     const double exact = static_cast<double>(distinct.size());
     lines.push_back(hll_row("synthetic", synthetic, exact));
+    lines.push_back(cpc_row("synthetic", synthetic, exact));
     lines.push_back(theta_row("synthetic", synthetic, exact));
     lines.push_back(bloom_row("synthetic", synthetic));
     lines.push_back(countmin_row("synthetic", synthetic));
@@ -339,6 +361,7 @@ int main(int argc, char** argv) {
     const double exact = static_cast<double>(distinct.size());
     const std::string dataset = dataset_label(tpch_path);
     lines.push_back(hll_row(dataset, values, exact));
+    lines.push_back(cpc_row(dataset, values, exact));
     lines.push_back(theta_row(dataset, values, exact));
     lines.push_back(bloom_row(dataset, values));
     lines.push_back(countmin_row(dataset, values));

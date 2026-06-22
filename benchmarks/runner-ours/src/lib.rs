@@ -16,6 +16,7 @@ use std::time::Instant;
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
 use sketches::bloom::BloomFilter;
 use sketches::countmin::CountMinSketch;
+use sketches::cpc::CpcSketch;
 use sketches::hll::HllSketch;
 use sketches::quantiles::KllSketch;
 use sketches::serialization::Serializable;
@@ -77,6 +78,33 @@ fn hll_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) 
     let bytes = sketch.to_bytes().len();
     row(
         "hll",
+        dataset,
+        "distinct_count",
+        n,
+        throughput(n, elapsed),
+        Some(bytes),
+        Some(estimate),
+        Some(exact),
+        Some(rel_error),
+    )
+}
+
+/// CPC distinct-count row over a stream of `Hashable` items with known exact
+/// cardinality. Uses `lg_k = 12` to match the HLL/Theta configuration. Bytes is
+/// the serialised length via the `Serializable` trait.
+fn cpc_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) -> String {
+    let n = items.len() as u64;
+    let mut sketch = CpcSketch::new(12);
+    let start = Instant::now();
+    for item in items {
+        sketch.update(item);
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let estimate = sketch.estimate();
+    let rel_error = (estimate - exact).abs() / exact;
+    let bytes = sketch.to_bytes().len();
+    row(
+        "cpc",
         dataset,
         "distinct_count",
         n,
@@ -207,6 +235,7 @@ pub fn run(n: u64) -> Vec<String> {
     vec![
         HEADER.to_string(),
         hll_row("synthetic", &synthetic, exact),
+        cpc_row("synthetic", &synthetic, exact),
         theta_row("synthetic", &synthetic, exact),
         kll_synthetic_row(n),
         bloom_row("synthetic", &synthetic),
@@ -229,6 +258,7 @@ pub fn run_tpch(
 
     Ok(vec![
         hll_row(dataset, &values, exact),
+        cpc_row(dataset, &values, exact),
         theta_row(dataset, &values, exact),
         bloom_row(dataset, &values),
         countmin_row(dataset, &values),
