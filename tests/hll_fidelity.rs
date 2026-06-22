@@ -43,3 +43,18 @@ fn hll_roundtrip_keeps_hip_estimate_exact() {
         "round-trip changed the HIP estimate"
     );
 }
+
+#[test]
+fn hll_merge_is_accurate_via_composite_fallback() {
+    let mut a = HllSketch::new(12);
+    let mut b = HllSketch::new(12);
+    for i in 0u64..500_000 {
+        a.update(&i);
+    }
+    for i in 500_000u64..1_000_000 {
+        b.update(&i);
+    }
+    a.merge(&b);
+    let e = (a.estimate() - 1_000_000.0).abs() / 1_000_000.0;
+    assert!(e < 0.03, "merged hll rel_error {e}");
+}
