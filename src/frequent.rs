@@ -207,7 +207,7 @@ impl<T: Hash + Eq + Clone> FrequentItemsSketch<T> {
             }
         }
 
-        results.sort_by(|a, b| b.estimate.cmp(&a.estimate));
+        results.sort_by_key(|b| std::cmp::Reverse(b.estimate));
         results
     }
 
@@ -224,7 +224,7 @@ impl<T: Hash + Eq + Clone> FrequentItemsSketch<T> {
             })
             .collect();
 
-        results.sort_by(|a, b| b.estimate.cmp(&a.estimate));
+        results.sort_by_key(|b| std::cmp::Reverse(b.estimate));
         results.truncate(k);
         results
     }

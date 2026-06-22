@@ -187,16 +187,16 @@ impl TDigest {
         }
 
         // Handle edge cases
-        if let Some(min) = self.min_value {
-            if value <= min {
-                return 0.0;
-            }
+        if let Some(min) = self.min_value
+            && value <= min
+        {
+            return 0.0;
         }
 
-        if let Some(max) = self.max_value {
-            if value >= max {
-                return 1.0;
-            }
+        if let Some(max) = self.max_value
+            && value >= max
+        {
+            return 1.0;
         }
 
         // Binary search for the rank with tight tolerance

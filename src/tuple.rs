@@ -300,12 +300,12 @@ impl<S: Summary> TupleSketch<S> {
 
         let mut result_pairs: Vec<(u64, S)> = Vec::new();
         for (hash, summary) in probe.retained_entries() {
-            if hash < result_theta {
-                if let Some(other_summary) = lookup_map.get(hash) {
-                    let mut merged = summary.clone();
-                    merged.merge(other_summary);
-                    result_pairs.push((hash, merged));
-                }
+            if hash < result_theta
+                && let Some(other_summary) = lookup_map.get(hash)
+            {
+                let mut merged = summary.clone();
+                merged.merge(other_summary);
+                result_pairs.push((hash, merged));
             }
         }
 

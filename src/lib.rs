@@ -46,6 +46,7 @@ pub mod theta;
 pub mod tuple;
 pub mod varopt;
 
+pub mod hash;
 pub mod serialization;
 
 // Performance optimization modules

@@ -449,7 +449,11 @@ impl CountSketch {
         let mut hasher = DefaultHasher::new();
         self.sign_seeds[row].hash(&mut hasher);
         item.hash(&mut hasher);
-        if hasher.finish() % 2 == 0 { 1 } else { -1 }
+        if hasher.finish().is_multiple_of(2) {
+            1
+        } else {
+            -1
+        }
     }
 }
 
