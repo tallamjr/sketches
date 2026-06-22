@@ -102,6 +102,21 @@ def test_render_plots_writes_three_pngs(tmp_path):
         assert os.path.getsize(path) > 0
 
 
+def test_rmse_parity_and_table():
+    import report
+
+    # exact known per-impl rmse values
+    rows = [
+        {"implementation": "ours", "sketch": "theta", "lg_k": "12", "rmse": "0.016", "mean_rel_error": "0.012", "max_rel_error": "0.04"},
+        {"implementation": "apache-rust", "sketch": "theta", "lg_k": "12", "rmse": "0.015", "mean_rel_error": "0.011", "max_rel_error": "0.039"},
+    ]
+    assert report.rmse_parity(0.016, 0.015) is True  # within 1.25x
+    assert report.rmse_parity(0.05, 0.015) is False  # >1.25x worse
+    table = report.render_rmse_table(rows, k=4096)
+    assert "theta" in table and "theoretical" in table.lower()
+    assert "0.0156" in table or "0.016" in table  # 1/sqrt(4096)
+
+
 def test_font_family_resolves_to_tahoma():
     # Tahoma is installed in this environment, so importing plots (which calls
     # _apply_tahoma at import time) must resolve the family to Tahoma.

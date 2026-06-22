@@ -12,7 +12,10 @@ REPORTER := reporter
 RESULTS := results
 PLOTS := $(RESULTS)/plots
 
-.PHONY: ours apache-rust cpp report gate clean
+RMSE_TRIALS ?= 100
+RMSE_N ?= 100000
+
+.PHONY: ours apache-rust cpp report gate rmse clean
 
 ours:
 	cd runner-ours && cargo run --release -- --n $(N) --out ../$(RESULTS)/ours.csv
@@ -39,6 +42,16 @@ rows=report.load_rows('$$csvs'.split()); print(plots.render_plots(rows,'$(PLOTS)
 # Run our runner, then gate its accuracy against the per-sketch thresholds.
 gate: ours
 	$(PYTHON) $(REPORTER)/report.py --check-accuracy $(REPORTER)/thresholds.json $(RESULTS)/ours.csv
+
+# Run each runner in multi-trial RMSE mode, then render the RMSE parity table
+# and rmse.png comparing each implementation against the 1/sqrt(k) floor.
+rmse:
+	cd runner-ours && cargo run --release -- --trials $(RMSE_TRIALS) --n $(RMSE_N) --out ../$(RESULTS)/rmse_ours.csv
+	cd runner-apache-rust && cargo run --release -- --trials $(RMSE_TRIALS) --n $(RMSE_N) --out ../$(RESULTS)/rmse_apache-rust.csv
+	cmake -S runner-cpp -B runner-cpp/build
+	cmake --build runner-cpp/build
+	runner-cpp/build/runner_cpp --trials $(RMSE_TRIALS) --n $(RMSE_N) --out $(RESULTS)/rmse_apache-cpp.csv
+	$(PYTHON) $(REPORTER)/report.py --rmse $(RESULTS)/rmse_*.csv
 
 clean:
 	rm -f $(RESULTS)/*.csv

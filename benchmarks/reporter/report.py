@@ -22,6 +22,7 @@ Stdlib only.
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 
@@ -219,6 +220,138 @@ def check_accuracy(rows, thresholds):
     return passed, failures + notes
 
 
+RMSE_HEADER = [
+    "implementation",
+    "sketch",
+    "lg_k",
+    "trials",
+    "n_per_trial",
+    "rmse",
+    "mean_rel_error",
+    "max_rel_error",
+]
+
+RMSE_SKETCHES = ["theta", "hll", "cpc"]
+
+
+def load_rmse_rows(paths):
+    """Load all rows from the given RMSE summary CSV paths into a list of dicts.
+
+    Each row carries the RMSE schema columns as string keys. Raises on a
+    missing file or a header that does not match the RMSE schema.
+    """
+    rows = []
+    for path in paths:
+        with open(path, newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None:
+                raise ValueError(f"empty CSV (no header): {path}")
+            if reader.fieldnames != RMSE_HEADER:
+                raise ValueError(
+                    f"unexpected RMSE header in {path}: {reader.fieldnames!r}, "
+                    f"expected {RMSE_HEADER!r}"
+                )
+            for record in reader:
+                rows.append(dict(record))
+    return rows
+
+
+def rmse_parity(ours_rmse, ref_rmse, tol=1.25):
+    """Return True iff our RMSE is within a factor `tol` of the reference RMSE.
+
+    Parity holds when ours_rmse <= ref_rmse * tol and ours_rmse >= ref_rmse / tol,
+    i.e. ours is neither more than `tol` times worse nor more than `tol` times
+    better than the reference.
+    """
+    return ours_rmse <= ref_rmse * tol and ours_rmse >= ref_rmse / tol
+
+
+def render_rmse_table(rows, k=4096):
+    """Render a markdown RMSE comparison table from loaded RMSE rows.
+
+    Rows are grouped by sketch. For each sketch the table shows, per
+    implementation (ours, apache-rust, apache-cpp), the rmse, mean_rel_error and
+    max_rel_error, a `theoretical` column equal to 1/sqrt(k) (the expected error
+    floor), and a parity verdict comparing ours against apache-rust via
+    rmse_parity.
+    """
+    theoretical = 1.0 / math.sqrt(k)
+
+    groups = {}
+    order = []
+    for row in rows:
+        sketch = row["sketch"]
+        if sketch not in groups:
+            groups[sketch] = {}
+            order.append(sketch)
+        groups[sketch][row["implementation"]] = row
+
+    columns = [
+        "sketch",
+        "ours rmse",
+        "ours mean",
+        "ours max",
+        "a-rust rmse",
+        "a-rust mean",
+        "a-rust max",
+        "a-cpp rmse",
+        "a-cpp mean",
+        "a-cpp max",
+        "theoretical",
+        "parity (ours vs a-rust)",
+    ]
+
+    lines = []
+    lines.append("| " + " | ".join(columns) + " |")
+    lines.append("| " + " | ".join("---" for _ in columns) + " |")
+
+    def cell(impl_rows, impl, field):
+        r = impl_rows.get(impl)
+        value = _as_float(r[field]) if r else None
+        return f"{value:.4f}" if value is not None else "-"
+
+    def parity_cell(impl_rows):
+        ours = impl_rows.get("ours")
+        ref = impl_rows.get("apache-rust")
+        ours_rmse = _as_float(ours["rmse"]) if ours else None
+        ref_rmse = _as_float(ref["rmse"]) if ref else None
+        if ours_rmse is None or ref_rmse is None or ref_rmse == 0:
+            return "-"
+        return "pass" if rmse_parity(ours_rmse, ref_rmse) else "FAIL"
+
+    ordered = [s for s in RMSE_SKETCHES if s in groups]
+    ordered += [s for s in order if s not in RMSE_SKETCHES]
+
+    for sketch in ordered:
+        impl_rows = groups[sketch]
+        cells = [
+            sketch,
+            cell(impl_rows, "ours", "rmse"),
+            cell(impl_rows, "ours", "mean_rel_error"),
+            cell(impl_rows, "ours", "max_rel_error"),
+            cell(impl_rows, "apache-rust", "rmse"),
+            cell(impl_rows, "apache-rust", "mean_rel_error"),
+            cell(impl_rows, "apache-rust", "max_rel_error"),
+            cell(impl_rows, "apache-cpp", "rmse"),
+            cell(impl_rows, "apache-cpp", "mean_rel_error"),
+            cell(impl_rows, "apache-cpp", "max_rel_error"),
+            f"{theoretical:.4f}",
+            parity_cell(impl_rows),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines.append("")
+    lines.append("**Notes**")
+    lines.append("")
+    lines.append(
+        f"> The `theoretical` column is the 1/sqrt(k) error floor for k={k} "
+        f"(~{theoretical:.4f}). Parity holds when our RMSE is within 1.25x of "
+        "the apache-rust reference in either direction."
+    )
+
+    return "\n".join(lines) + "\n"
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description="Compare benchmark result CSVs and render a markdown table, "
@@ -226,8 +359,15 @@ def _build_parser():
     )
     parser.add_argument(
         "csv",
-        nargs="+",
+        nargs="*",
         help="one or more result CSV paths sharing the benchmark schema",
+    )
+    parser.add_argument(
+        "--rmse",
+        nargs="+",
+        metavar="CSV",
+        help="RMSE summary CSV paths: print the RMSE parity table (and an "
+        "rmse.png plot when matplotlib is available)",
     )
     parser.add_argument(
         "--md",
@@ -245,6 +385,26 @@ def _build_parser():
 def main(argv=None):
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.rmse:
+        rmse_rows = load_rmse_rows(args.rmse)
+        table = render_rmse_table(rmse_rows)
+        sys.stdout.write(table)
+        out_dir = os.path.dirname(os.path.abspath(args.rmse[0]))
+        try:
+            import plots
+        except ImportError:
+            print(
+                "note: matplotlib not available, skipping rmse.png",
+                file=sys.stderr,
+            )
+            return 0
+        path = plots.render_rmse_plot(rmse_rows, out_dir)
+        print(f"wrote {path}", file=sys.stderr)
+        return 0
+
+    if not args.csv:
+        parser.error("at least one result CSV is required (or use --rmse)")
 
     rows = load_rows(args.csv)
 

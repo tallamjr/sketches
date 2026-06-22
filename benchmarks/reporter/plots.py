@@ -109,6 +109,61 @@ def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
     return out_path
 
 
+RMSE_SKETCHES = ["theta", "hll", "cpc"]
+
+
+def render_rmse_plot(rows, out_dir):
+    """Write rmse.png: grouped bars of rmse per implementation, grouped by sketch.
+
+    One group per sketch, one bar per implementation. Transparent background and
+    Tahoma styling. Returns the written path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    groups = {}
+    order = []
+    for row in rows:
+        sketch = row["sketch"]
+        if sketch not in groups:
+            groups[sketch] = {}
+            order.append(sketch)
+        groups[sketch][row["implementation"]] = row
+
+    sketches = [s for s in RMSE_SKETCHES if s in groups]
+    sketches += [s for s in order if s not in RMSE_SKETCHES]
+
+    series = {impl: [] for impl in IMPLEMENTATIONS}
+    for sketch in sketches:
+        impl_rows = groups[sketch]
+        for impl in IMPLEMENTATIONS:
+            r = impl_rows.get(impl)
+            series[impl].append(_as_float(r["rmse"]) if r else None)
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(sketches) + 2.0), 4.5))
+
+    n_groups = len(sketches)
+    n_impls = len(IMPLEMENTATIONS)
+    bar_width = 0.8 / n_impls
+    indices = list(range(n_groups))
+
+    for offset, impl in enumerate(IMPLEMENTATIONS):
+        heights = [v if v is not None else 0.0 for v in series[impl]]
+        positions = [i + offset * bar_width for i in indices]
+        ax.bar(positions, heights, bar_width, label=impl)
+
+    centre = (n_impls - 1) * bar_width / 2.0
+    ax.set_xticks([i + centre for i in indices])
+    ax.set_xticklabels(sketches)
+    ax.set_ylabel("RMSE (relative error)")
+    ax.set_title("RMSE by sketch and implementation")
+    ax.legend()
+
+    out_path = os.path.join(out_dir, "rmse.png")
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
 def render_plots(rows, out_dir):
     """Write throughput, memory and accuracy PNGs into out_dir.
 
