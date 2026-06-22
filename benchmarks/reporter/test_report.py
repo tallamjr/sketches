@@ -117,6 +117,19 @@ def test_rmse_parity_and_table():
     assert "0.0156" in table or "0.016" in table  # 1/sqrt(4096)
 
 
+def test_before_after_rmse_plot(tmp_path):
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    import plots, matplotlib.pyplot as plt
+    out = str(tmp_path / "hll_ba.png")
+    path = plots.render_before_after_rmse_plot(
+        {"ours-before": 0.0175, "ours-after": 0.0129, "apache-rust": 0.0129},
+        out, theoretical=0.015625,
+    )
+    assert os.path.exists(path) and os.path.getsize(path) > 0
+    assert plt.rcParams["font.family"] in (["Tahoma"], "Tahoma")
+
+
 def test_font_family_resolves_to_tahoma():
     # Tahoma is installed in this environment, so importing plots (which calls
     # _apply_tahoma at import time) must resolve the family to Tahoma.

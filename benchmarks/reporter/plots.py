@@ -164,6 +164,45 @@ def render_rmse_plot(rows, out_dir):
     return out_path
 
 
+def render_before_after_rmse_plot(labels_to_rmse, out_path, theoretical):
+    """Render a before/after RMSE bar chart styled with Tahoma.
+
+    One bar per named RMSE value (keys are bar labels, e.g. "ours-before",
+    "ours-after", "apache-rust"; values are RMSE floats). A dashed horizontal
+    line marks the theoretical floor. Transparent background and Tahoma styling.
+    Returns out_path.
+    """
+    _apply_tahoma()
+
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    labels = list(labels_to_rmse.keys())
+    values = [labels_to_rmse[label] for label in labels]
+    indices = list(range(len(labels)))
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
+
+    ax.bar(indices, values, 0.6)
+    ax.axhline(
+        theoretical,
+        linestyle="--",
+        color="black",
+        label=f"theoretical ({theoretical:g})",
+    )
+
+    ax.set_xticks(indices)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("RMSE (relative error)")
+    ax.set_title("HLL accuracy: before vs after HIP")
+    ax.legend()
+
+    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
 def render_plots(rows, out_dir):
     """Write throughput, memory and accuracy PNGs into out_dir.
 
