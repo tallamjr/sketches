@@ -54,8 +54,6 @@ pub mod serialization;
 #[cfg(feature = "optimized")]
 pub mod compact_memory;
 #[cfg(feature = "optimized")]
-pub mod fast_hash;
-#[cfg(feature = "optimized")]
 pub mod simd_ops;
 
 /// Python binding for CPC sketch.

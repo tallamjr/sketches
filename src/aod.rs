@@ -22,13 +22,13 @@
 //! - Configurable memory usage via capacity parameter
 //! - Serialization support for distributed computing
 
-use serde_json;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Configuration for AOD sketch creation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AodConfig {
     /// Maximum number of entries before sampling
     pub capacity: usize,
@@ -64,7 +64,7 @@ impl AodEntry {
 }
 
 /// Array of Doubles Sketch for cardinality estimation with summary statistics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AodSketch {
     /// Configuration parameters
     pub config: AodConfig,
@@ -318,53 +318,15 @@ impl AodSketch {
         self.clone()
     }
 
-    /// Serialize sketch to bytes (simple implementation)
+    /// Serialize sketch to bytes using compact postcard binary encoding
     pub fn to_bytes(&self) -> Vec<u8> {
-        // This is a simplified serialization - in production you'd want a more efficient format
-        let serialized = serde_json::json!({
-            "config": {
-                "capacity": self.config.capacity,
-                "num_values": self.config.num_values,
-                "seed": self.config.seed,
-            },
-            "theta": self.theta,
-            "is_empty": self.is_empty,
-            "entries": self.entries,
-        });
-
-        serde_json::to_vec(&serialized).unwrap_or_default()
+        postcard::to_allocvec(self)
+            .expect("AOD sketch serialization cannot fail for in-memory data")
     }
 
-    /// Deserialize sketch from bytes (simple implementation)
+    /// Deserialize sketch from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let data: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON: {e}"))?;
-
-        let config = AodConfig {
-            capacity: data["config"]["capacity"].as_u64().unwrap_or(4096) as usize,
-            num_values: data["config"]["num_values"].as_u64().unwrap_or(1) as usize,
-            seed: data["config"]["seed"].as_u64().unwrap_or(0),
-        };
-
-        let theta = data["theta"].as_f64().unwrap_or(1.0);
-        let is_empty = data["is_empty"].as_bool().unwrap_or(true);
-
-        let mut entries = HashMap::new();
-        if let Some(entries_obj) = data["entries"].as_object() {
-            for (key, value) in entries_obj {
-                if let (Ok(hash), Some(values_array)) = (key.parse::<u64>(), value.as_array()) {
-                    let values: Vec<f64> = values_array.iter().filter_map(|v| v.as_f64()).collect();
-                    entries.insert(hash, values);
-                }
-            }
-        }
-
-        Ok(Self {
-            config,
-            theta,
-            entries,
-            is_empty,
-        })
+        postcard::from_bytes(bytes).map_err(|e| format!("AOD deserialization failed: {e}"))
     }
 }
 
@@ -508,5 +470,15 @@ mod tests {
         assert_eq!(sketch.upper_bound(0.95), 0.0);
         assert_eq!(sketch.lower_bound(0.95), 0.0);
         assert_eq!(sketch.theta(), 1.0);
+    }
+
+    #[test]
+    fn aod_serialization_is_binary_not_json() {
+        let mut a = AodSketch::new();
+        a.update(&"k", &[1.0]).unwrap();
+        let bytes = a.to_bytes();
+        assert!(bytes.first() != Some(&b'{'), "must not be JSON");
+        let back = AodSketch::from_bytes(&bytes).unwrap();
+        assert_eq!(a.estimate(), back.estimate());
     }
 }
