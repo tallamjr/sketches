@@ -1,0 +1,23 @@
+[package]
+name = "runner-apache-rust"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone crate: the repo root is not a Cargo workspace, and the Apache
+# `datasketches` crate is itself a member of its own workspace at
+# lib/datasketches-rust. Declaring an empty workspace table here makes this
+# runner its own workspace root, so Cargo treats the Apache crate purely as a
+# path dependency rather than trying to reconcile the two workspaces.
+[workspace]
+
+[dependencies]
+datasketches = { path = "../../lib/datasketches-rust/datasketches" }
+datasets = { path = "../datasets" }
+
+[lib]
+name = "runner_apache_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "runner-apache-rust"
+path = "src/main.rs"
