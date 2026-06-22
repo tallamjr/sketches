@@ -39,7 +39,20 @@ pub enum CodecError {
 
 impl fmt::Display for CodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            CodecError::UnexpectedEof => {
+                write!(f, "unexpected end of input while decoding sketch")
+            }
+            CodecError::BadMagic => write!(f, "bad magic bytes: not a sketch serialization"),
+            CodecError::UnknownFamily(b) => write!(f, "unknown sketch family id: {b}"),
+            CodecError::WrongFamily { expected, found } => write!(
+                f,
+                "wrong sketch family: expected {expected:?}, found {found:?}"
+            ),
+            CodecError::UnsupportedVersion(v) => {
+                write!(f, "unsupported serialization version: {v}")
+            }
+        }
     }
 }
 
@@ -218,5 +231,39 @@ mod tests {
         let mut r = SketchReader::new(&bytes);
         let err = SketchHeader::read_expecting(&mut r, Family::Hll).unwrap_err();
         assert!(matches!(err, CodecError::WrongFamily { .. }));
+    }
+
+    #[test]
+    fn truncated_input_is_unexpected_eof() {
+        // A header needs 5 bytes (2 magic + family + version + flags);
+        // 3 bytes is not enough.
+        let buf = [0x53u8, 0x4B, 0x01];
+        let mut r = SketchReader::new(&buf);
+        assert!(matches!(
+            SketchHeader::read(&mut r),
+            Err(CodecError::UnexpectedEof)
+        ));
+    }
+
+    #[test]
+    fn bad_magic_is_rejected() {
+        // First byte corrupted; valid magic is [0x53, 0x4B].
+        let buf = [0xFFu8, 0xFF, 1, 1, 0];
+        let mut r = SketchReader::new(&buf);
+        assert!(matches!(
+            SketchHeader::read(&mut r),
+            Err(CodecError::BadMagic)
+        ));
+    }
+
+    #[test]
+    fn unknown_family_is_rejected() {
+        // Valid magic, family id 99 is not defined.
+        let buf = [0x53u8, 0x4B, 99, 1, 0];
+        let mut r = SketchReader::new(&buf);
+        assert!(matches!(
+            SketchHeader::read(&mut r),
+            Err(CodecError::UnknownFamily(99))
+        ));
     }
 }
