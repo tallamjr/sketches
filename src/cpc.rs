@@ -40,9 +40,8 @@ const MAX_LG_K: u8 = 26;
 /// of the coupon count C relative to K = 2^lg_k.
 ///
 /// The update path does not branch on this enum directly (it branches on
-/// whether the sliding window is allocated), so it is only used to expose and
-/// assert flavour transitions in tests.
-#[cfg(test)]
+/// whether the sliding window is allocated), so it is used to expose and
+/// assert flavour transitions in tests and to drive the union merge logic.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum Flavor {
     Empty,   //    0  == C <    1
@@ -54,9 +53,8 @@ enum Flavor {
 
 /// Determine the flavour for a given `lg_k` and coupon count.
 ///
-/// Ported from `cpc/mod.rs::determine_flavor`. Used only by the test-only
-/// [`CpcSketch::flavor`] accessor.
-#[cfg(test)]
+/// Ported from `cpc/mod.rs::determine_flavor`. Used by the [`CpcSketch::flavor`]
+/// accessor and the union merge logic.
 fn determine_flavor(lg_k: u8, num_coupons: u32) -> Flavor {
     let k = 1u32 << lg_k;
     let c2 = num_coupons << 1;
@@ -364,7 +362,6 @@ impl CpcSketch {
         self.row_col_update(row_col);
     }
 
-    #[cfg(test)]
     fn flavor(&self) -> Flavor {
         determine_flavor(self.lg_k, self.num_coupons)
     }
@@ -660,13 +657,15 @@ impl CpcSketch {
 
     /// Merge another CPC sketch into this one (in-place union).
     ///
-    /// NOTE: Correct merge semantics are implemented in Task 4 (`CpcUnion`
-    /// rewrite). This is a compiling placeholder that preserves the public API;
-    /// it must not be relied upon for accuracy yet.
-    pub fn merge(&mut self, _other: &CpcSketch) {
-        // Task 4 will rewrite the union path. Intentionally left unimplemented
-        // here so the public API keeps compiling for the PyO3 wrapper.
-        self.merge_flag = true;
+    /// Implemented via a [`CpcUnion`]: both this sketch and `other` are folded
+    /// into a fresh union accumulator and the reduced result replaces `self`.
+    /// The result carries `merge_flag = true`, so [`estimate`](Self::estimate)
+    /// uses the ICON estimator (HIP is invalid after a merge).
+    pub fn merge(&mut self, other: &CpcSketch) {
+        let mut union = CpcUnion::new(self.lg_k);
+        union.update(self);
+        union.update(other);
+        *self = union.to_sketch();
     }
 
     /// Serialise the sketch to bytes.
@@ -731,42 +730,352 @@ impl CpcSketch {
     }
 }
 
-/// CPC Union for merging multiple CPC sketches.
+/// The internal state of the union operation.
 ///
-/// NOTE: The correct union implementation lands in Task 4. This is a compiling
-/// placeholder preserving the public API.
+/// At most one of `Accumulator` and `BitMatrix` is held at any moment. The
+/// accumulator is a sketch object that is employed until it graduates out of
+/// Sparse mode, at which point it is converted into a full-sized bit matrix.
+/// The bit matrix is mathematically a sketch but does not maintain any of the
+/// "extra" fields of our sketch objects.
+#[derive(Debug, Clone)]
+enum UnionState {
+    Accumulator(CpcSketch),
+    BitMatrix(Vec<u64>),
+}
+
+/// CPC Union (merge) operation for combining multiple CPC sketches.
+///
+/// Faithfully ported from the Apache DataSketches Rust reference
+/// (`cpc/union.rs`). The accumulating union ORs the window and surprising-value
+/// table of each source sketch into a bit matrix, downsampling lg_k where a
+/// source has a smaller lg_k, and reduces the matrix back to a sketch with
+/// `merge_flag = true` so [`estimate`](Self::estimate) uses ICON.
+#[derive(Debug, Clone)]
 pub struct CpcUnion {
+    /// Immutable target lg_k. Due to merging with sources of lower lg_k, this
+    /// can be reduced below the configured value.
     lg_k: u8,
-    accumulator: CpcSketch,
+    state: UnionState,
+}
+
+impl Default for CpcUnion {
+    fn default() -> Self {
+        Self::new(DEFAULT_LG_K)
+    }
 }
 
 impl CpcUnion {
     /// Create a new CPC union with the given lg_k.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `lg_k` is not in the range `[4, 26]`.
     pub fn new(lg_k: u8) -> Self {
+        // We begin with the accumulator holding an empty merged sketch object.
+        let sketch = CpcSketch::new(lg_k);
         CpcUnion {
             lg_k,
-            accumulator: CpcSketch::new(lg_k),
+            state: UnionState::Accumulator(sketch),
         }
     }
 
     /// The lg_k parameter of this union.
+    ///
+    /// Note that due to merging with source sketches that may have a lower
+    /// value of lg_k, this value can be less than what the union object was
+    /// configured with.
     pub fn lg_k(&self) -> u8 {
         self.lg_k
     }
 
     /// Add a sketch to the union.
     pub fn update(&mut self, sketch: &CpcSketch) {
-        self.accumulator.merge(sketch);
+        let flavor = sketch.flavor();
+        if flavor == Flavor::Empty {
+            return;
+        }
+
+        if sketch.lg_k() < self.lg_k {
+            self.reduce_k(sketch.lg_k());
+        }
+
+        // if the source is past SPARSE mode, make sure the union is a bit matrix.
+        if flavor > Flavor::Sparse
+            && let UnionState::Accumulator(old_sketch) = &self.state
+        {
+            let bit_matrix = old_sketch.build_bit_matrix();
+            self.state = UnionState::BitMatrix(bit_matrix);
+        }
+
+        match &mut self.state {
+            UnionState::Accumulator(old_sketch) => {
+                // [Case A] source Sparse, union is the sketch accumulator.
+                if flavor == Flavor::Sparse {
+                    let old_flavor = old_sketch.flavor();
+                    if old_flavor != Flavor::Sparse && old_flavor != Flavor::Empty {
+                        unreachable!("unexpected old flavor in union accumulator: {old_flavor:?}");
+                    }
+
+                    // The following partially fixes the snowplow problem provided
+                    // that the K's are equal.
+                    if old_flavor == Flavor::Empty && self.lg_k == sketch.lg_k() {
+                        *old_sketch = sketch.clone();
+                        return;
+                    }
+
+                    walk_table_updating_sketch(old_sketch, sketch.surprising_value_table());
+                    let final_flavor = old_sketch.flavor();
+
+                    // if the accumulator graduated beyond sparse, switch to a bit
+                    // matrix representation.
+                    if final_flavor > Flavor::Sparse {
+                        let bit_matrix = old_sketch.build_bit_matrix();
+                        self.state = UnionState::BitMatrix(bit_matrix);
+                    }
+
+                    return;
+                }
+
+                // If the flavor is past SPARSE mode, the state must have been
+                // converted to a bit matrix above. Empty was handled at the start
+                // and Sparse was handled above.
+                unreachable!("unexpected flavor in union accumulator: {flavor:?}");
+            }
+            UnionState::BitMatrix(old_matrix) => {
+                if flavor == Flavor::Sparse {
+                    // [Case B] source Sparse, union is a bit matrix.
+                    or_table_into_matrix(old_matrix, self.lg_k, sketch.surprising_value_table());
+                    return;
+                }
+
+                if matches!(flavor, Flavor::Hybrid | Flavor::Pinned) {
+                    // [Case C] source Hybrid or Pinned, union is a bit matrix.
+                    or_window_into_matrix(
+                        old_matrix,
+                        self.lg_k,
+                        &sketch.sliding_window,
+                        sketch.window_offset,
+                        sketch.lg_k(),
+                    );
+                    or_table_into_matrix(old_matrix, self.lg_k, sketch.surprising_value_table());
+                    return;
+                }
+
+                // [Case D] source Sliding, union is a bit matrix.
+                // SLIDING mode uses inverted logic, so we cannot just walk the
+                // source. Instead we convert it to a bit matrix and OR it in.
+                assert_eq!(flavor, Flavor::Sliding);
+                let src_matrix = sketch.build_bit_matrix();
+                or_matrix_into_matrix(old_matrix, self.lg_k, &src_matrix, sketch.lg_k());
+            }
+        }
     }
 
-    /// Get the result sketch.
-    pub fn result(&self) -> &CpcSketch {
-        &self.accumulator
+    /// Reduce the union's lg_k to `new_lg_k`, downsampling the internal state.
+    fn reduce_k(&mut self, new_lg_k: u8) {
+        match &mut self.state {
+            UnionState::Accumulator(sketch) => {
+                if sketch.is_empty() {
+                    self.lg_k = new_lg_k;
+                    self.state = UnionState::Accumulator(CpcSketch::new(new_lg_k));
+                    return;
+                }
+
+                let mut new_sketch = CpcSketch::new(new_lg_k);
+                walk_table_updating_sketch(&mut new_sketch, sketch.surprising_value_table());
+
+                let final_new_flavor = new_sketch.flavor();
+                // the SV table had to have something in it.
+                assert_ne!(final_new_flavor, Flavor::Empty);
+                if final_new_flavor == Flavor::Sparse {
+                    self.lg_k = new_lg_k;
+                    self.state = UnionState::Accumulator(new_sketch);
+                    return;
+                }
+
+                // the new sketch graduated beyond sparse, so convert to a bit matrix.
+                self.lg_k = new_lg_k;
+                self.state = UnionState::BitMatrix(new_sketch.build_bit_matrix());
+            }
+            UnionState::BitMatrix(matrix) => {
+                let new_k = 1usize << new_lg_k;
+                let mut new_matrix = vec![0u64; new_k];
+                or_matrix_into_matrix(&mut new_matrix, new_lg_k, matrix, self.lg_k);
+                self.lg_k = new_lg_k;
+                self.state = UnionState::BitMatrix(new_matrix);
+            }
+        }
+    }
+
+    /// Get the union result as a new sketch.
+    ///
+    /// If the union holds an accumulator, a copy of that sketch is returned with
+    /// `merge_flag = true`. If the union holds a bit matrix, the matrix is
+    /// reduced back to a sketch, recomputing `num_coupons` from the popcount and
+    /// rebuilding the window, surprising-value table, offset, and
+    /// first-interesting-column.
+    pub fn to_sketch(&self) -> CpcSketch {
+        match &self.state {
+            UnionState::Accumulator(sketch) => {
+                if sketch.is_empty() {
+                    CpcSketch::new(self.lg_k)
+                } else {
+                    let mut sketch = sketch.clone();
+                    assert_eq!(sketch.flavor(), Flavor::Sparse);
+                    sketch.merge_flag = true;
+                    sketch
+                }
+            }
+            UnionState::BitMatrix(matrix) => {
+                let lg_k = self.lg_k;
+
+                let mut sketch = CpcSketch::new(lg_k);
+                let num_coupons = count_bits_set_in_matrix(matrix);
+                sketch.num_coupons = num_coupons;
+                let offset = determine_correct_offset(lg_k, num_coupons);
+                sketch.window_offset = offset;
+
+                let k = 1usize << lg_k;
+                let mut sliding_window = vec![0u8; k];
+
+                // LgSize = K/16; in some cases this will end up being oversized.
+                let new_table_lg_size = (lg_k - 4).max(2);
+                let mut table = PairTable::new(new_table_lg_size, 6 + lg_k);
+
+                // the following works even when the offset is zero.
+                let mask_for_clearing_window = (0xFFu64 << offset) ^ u64::MAX;
+                let mask_for_flipping_early_zone = (1u64 << offset) - 1;
+                let mut all_surprises_ored = 0u64;
+
+                // The snowplow effect was caused by processing the rows in order,
+                // but it is fixed by using a sufficiently large hash table.
+                for (i, &matrix_row) in matrix.iter().enumerate().take(k) {
+                    let mut pattern = matrix_row;
+                    sliding_window[i] = ((pattern >> offset) & 0xFF) as u8;
+                    pattern &= mask_for_clearing_window;
+                    // this flipping converts surprising 0's to 1's.
+                    pattern ^= mask_for_flipping_early_zone;
+                    all_surprises_ored |= pattern;
+                    while pattern != 0 {
+                        let col = pattern.trailing_zeros();
+                        pattern ^= 1u64 << col; // erase the 1
+                        let row_col = ((i as u32) << 6) | col;
+                        let is_novel = table.maybe_insert(row_col);
+                        assert!(is_novel);
+                    }
+                }
+
+                sketch.first_interesting_column = all_surprises_ored.trailing_zeros() as u8;
+                if sketch.first_interesting_column > offset {
+                    sketch.first_interesting_column = offset; // corner case
+                }
+
+                // HIP-related fields contain zeros, which is fine because
+                // merge_flag is true, so the HIP estimator will not be used.
+                sketch.sliding_window = sliding_window;
+                sketch.surprising_value_table = Some(table);
+                sketch.merge_flag = true;
+
+                sketch
+            }
+        }
+    }
+
+    /// Get the result sketch (alias of [`to_sketch`](Self::to_sketch)).
+    pub fn result(&self) -> CpcSketch {
+        self.to_sketch()
     }
 
     /// Get the cardinality estimate from the union.
+    ///
+    /// Because the result carries `merge_flag = true`, this uses the ICON
+    /// estimator.
     pub fn estimate(&self) -> f64 {
-        self.accumulator.estimate()
+        self.to_sketch().estimate()
+    }
+
+    /// Returns the number of coupons in the union.
+    ///
+    /// Primarily for testing and validation.
+    pub fn num_coupons(&self) -> u32 {
+        match &self.state {
+            UnionState::Accumulator(sketch) => sketch.num_coupons,
+            UnionState::BitMatrix(matrix) => count_bits_set_in_matrix(matrix),
+        }
+    }
+}
+
+/// OR a source sliding window into the destination bit matrix, downsampling
+/// rows modulo the destination K when the destination lg_k is smaller.
+fn or_window_into_matrix(
+    dst_matrix: &mut [u64],
+    dst_lg_k: u8,
+    src_window: &[u8],
+    src_offset: u8,
+    src_lg_k: u8,
+) {
+    assert!(dst_lg_k <= src_lg_k);
+    let dst_mask = (1usize << dst_lg_k) - 1; // downsamples when dst_lg_k < src_lg_k
+    let src_k = 1usize << src_lg_k;
+    for (src_row, &window_byte) in src_window.iter().enumerate().take(src_k) {
+        dst_matrix[src_row & dst_mask] |= (window_byte as u64) << src_offset;
+    }
+}
+
+/// OR a source surprising-value table into the destination bit matrix,
+/// downsampling rows modulo the destination K when needed.
+fn or_table_into_matrix(dst_matrix: &mut [u64], dst_lg_k: u8, src_table: &PairTable) {
+    let dst_mask = (1usize << dst_lg_k) - 1; // downsamples when dst_lg_k < src_lg_k
+    for &row_col in src_table.slots() {
+        if row_col != u32::MAX {
+            let src_row = (row_col >> 6) as usize;
+            let src_col = (row_col & 63) as usize;
+            let dst_row = src_row & dst_mask;
+            dst_matrix[dst_row] |= 1u64 << src_col;
+        }
+    }
+}
+
+/// OR a source bit matrix into the destination bit matrix, downsampling rows
+/// modulo the destination K when the destination lg_k is smaller.
+fn or_matrix_into_matrix(dst_matrix: &mut [u64], dst_lg_k: u8, src_matrix: &[u64], src_lg_k: u8) {
+    assert!(dst_lg_k <= src_lg_k);
+    let dst_mask = (1usize << dst_lg_k) - 1; // downsamples when dst_lg_k < src_lg_k
+    let src_k = 1usize << src_lg_k;
+    for (src_row, &src_bits) in src_matrix.iter().enumerate().take(src_k) {
+        let dst_row = src_row & dst_mask;
+        dst_matrix[dst_row] |= src_bits;
+    }
+}
+
+/// Walk a source surprising-value table, updating the destination sketch via
+/// `row_col_update`. A golden-ratio stride over the table slots avoids the
+/// snowplow effect; row indices are masked to the destination lg_k.
+fn walk_table_updating_sketch(sketch: &mut CpcSketch, table: &PairTable) {
+    assert!(sketch.lg_k() <= 26);
+
+    let slots = table.slots();
+    let num_slots = slots.len() as u32;
+
+    // downsamples when destination lg_k < source lg_k.
+    let dst_mask = (((1u64 << sketch.lg_k()) - 1) << 6) | 63;
+    // Using a golden ratio stride fixes the snowplow effect.
+    let mut stride = (0.6180339887498949 * (num_slots as f64)) as u32;
+    assert!(stride >= 2);
+    if stride == ((stride >> 1) << 1) {
+        // force the stride to be odd.
+        stride += 1;
+    }
+    assert!((stride >= 3) && (stride < num_slots));
+
+    let mut k = 0u32;
+    for _ in 0..num_slots {
+        k &= num_slots - 1;
+        let row_col = slots[k as usize];
+        if row_col != u32::MAX {
+            sketch.row_col_update(row_col & (dst_mask as u32));
+        }
+        k += stride;
     }
 }
 

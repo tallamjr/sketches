@@ -35,3 +35,37 @@ fn cpc_accuracy_sweeps_cardinality() {
         assert!(e < 0.03, "cpc n={n} rel_error {e}");
     }
 }
+
+#[test]
+fn cpc_union_matches_combined_cardinality() {
+    // Two disjoint halves of a distinct stream; the union cardinality is the sum.
+    let mut a = CpcSketch::new(12);
+    let mut b = CpcSketch::new(12);
+    for i in 0u64..400_000 {
+        a.update(&i);
+    }
+    for i in 400_000u64..1_000_000 {
+        b.update(&i);
+    }
+    let mut u = sketches::cpc::CpcUnion::new(12);
+    u.update(&a);
+    u.update(&b);
+    let e = (u.estimate() - 1_000_000.0).abs() / 1_000_000.0;
+    assert!(e < 0.03, "cpc union rel_error {e}");
+}
+
+#[test]
+fn cpc_merge_matches_combined_cardinality() {
+    // In-place merge of disjoint ranges must estimate the combined distinct count.
+    let mut a = CpcSketch::new(12);
+    let mut b = CpcSketch::new(12);
+    for i in 0u64..350_000 {
+        a.update(&i);
+    }
+    for i in 350_000u64..900_000 {
+        b.update(&i);
+    }
+    a.merge(&b);
+    let e = rel_err(a.estimate(), 900_000.0);
+    assert!(e < 0.03, "cpc merge rel_error {e}");
+}
