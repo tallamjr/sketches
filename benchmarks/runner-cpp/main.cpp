@@ -183,6 +183,72 @@ std::string countmin_row(const std::string& dataset, const std::vector<T>& items
              format_f64(rel_error));
 }
 
+// The exact CSV header line for the multi-trial RMSE mode (--trials). This
+// schema is separate from HEADER; the two are never mixed in one file. Its
+// columns match runner-ours and runner-apache-rust so the implementations can
+// be compared row-for-row.
+const char* const RMSE_HEADER =
+    "implementation,sketch,lg_k,trials,n_per_trial,rmse,mean_rel_error,max_rel_error";
+
+// Format a single RMSE summary row from a vector of per-trial relative errors.
+// rmse = sqrt(mean(rel_error^2)), mean_rel_error = mean(rel_error),
+// max_rel_error = max(rel_error). All three doubles are printed at %.6f.
+std::string rmse_row(const std::string& sketch, uint8_t lg_k, uint64_t trials,
+                     uint64_t n, const std::vector<double>& errors) {
+  const double count = static_cast<double>(errors.size());
+  double sum_sq = 0.0;
+  double sum = 0.0;
+  double max = 0.0;
+  for (double e : errors) {
+    sum_sq += e * e;
+    sum += e;
+    if (e > max) {
+      max = e;
+    }
+  }
+  const double rmse = std::sqrt(sum_sq / count);
+  const double mean = sum / count;
+  std::ostringstream out;
+  out << IMPLEMENTATION << ',' << sketch << ',' << static_cast<unsigned>(lg_k) << ','
+      << trials << ',' << n << ',' << format_f64(rmse) << ',' << format_f64(mean) << ','
+      << format_f64(max);
+  return out.str();
+}
+
+// Run `trials` independent trials of `n` distinct uint64 items each (trial t
+// over the disjoint range [t*n, (t+1)*n)) and emit one RMSE summary row per
+// distinct-count sketch (theta/hll/cpc) at lg_k = 12. A fresh sketch is built
+// per trial. Mirrors run_rmse in runner-apache-rust.
+std::vector<std::string> run_rmse(uint64_t trials, uint64_t n) {
+  std::vector<double> theta_errs;
+  std::vector<double> hll_errs;
+  std::vector<double> cpc_errs;
+  theta_errs.reserve(trials);
+  hll_errs.reserve(trials);
+  cpc_errs.reserve(trials);
+  const double truth = static_cast<double>(n);
+  for (uint64_t t = 0; t < trials; ++t) {
+    const uint64_t start = t * n;
+    auto theta = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
+    datasketches::hll_sketch hll(HLL_LG_K, datasketches::HLL_8);
+    datasketches::cpc_sketch cpc(CPC_LG_K);
+    for (uint64_t i = start; i < start + n; ++i) {
+      theta.update(i);
+      hll.update(i);
+      cpc.update(i);
+    }
+    theta_errs.push_back(std::fabs(theta.get_estimate() - truth) / truth);
+    hll_errs.push_back(std::fabs(hll.get_estimate() - truth) / truth);
+    cpc_errs.push_back(std::fabs(cpc.get_estimate() - truth) / truth);
+  }
+  return {
+      RMSE_HEADER,
+      rmse_row("theta", THETA_LG_K, trials, n, theta_errs),
+      rmse_row("hll", HLL_LG_K, trials, n, hll_errs),
+      rmse_row("cpc", CPC_LG_K, trials, n, cpc_errs),
+  };
+}
+
 // Detect the field delimiter by inspecting the first line of the file. TPC-H
 // data is commonly pipe-delimited; plain CSV uses commas. Pick whichever
 // appears more often, defaulting to comma. Mirrors datasets::detect_delimiter.
@@ -286,6 +352,7 @@ std::string dataset_label(const std::string& path) {
 void print_usage() {
   std::cerr << "usage: runner_cpp --n <N> [--tpch <csv_path> --col <COL>] --out <results.csv>"
             << std::endl;
+  std::cerr << "       runner_cpp --trials <T> --n <N> --out <results.csv>" << std::endl;
 }
 
 }  // namespace
@@ -299,12 +366,17 @@ int main(int argc, char** argv) {
   bool have_col = false;
   std::string out_path;
   bool have_out = false;
+  uint64_t trials = 0;
+  bool have_trials = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--n" && i + 1 < argc) {
       n = std::strtoull(argv[++i], nullptr, 10);
       have_n = true;
+    } else if (arg == "--trials" && i + 1 < argc) {
+      trials = std::strtoull(argv[++i], nullptr, 10);
+      have_trials = true;
     } else if (arg == "--tpch" && i + 1 < argc) {
       tpch_path = argv[++i];
       have_tpch = true;
@@ -329,6 +401,37 @@ int main(int argc, char** argv) {
     std::cerr << "runner_cpp: --tpch and --col must be supplied together" << std::endl;
     print_usage();
     return 1;
+  }
+
+  // Multi-trial RMSE mode. When --trials is supplied the runner emits the RMSE
+  // summary schema (theta/hll/cpc over disjoint uint64 ranges) instead of the
+  // single-run benchmark schema; the two are never mixed in one file.
+  if (have_trials) {
+    if (trials == 0) {
+      std::cerr << "runner_cpp: --trials must be a positive integer" << std::endl;
+      print_usage();
+      return 1;
+    }
+    if (n == 0) {
+      std::cerr << "runner_cpp: --n must be a positive integer in --trials mode" << std::endl;
+      print_usage();
+      return 1;
+    }
+    const std::vector<std::string> rmse_lines = run_rmse(trials, n);
+    std::ofstream out(out_path);
+    if (!out.is_open()) {
+      std::cerr << "runner_cpp: failed to open output file: " << out_path << std::endl;
+      return 1;
+    }
+    for (const std::string& line : rmse_lines) {
+      out << line << '\n';
+    }
+    out.flush();
+    if (!out.good()) {
+      std::cerr << "runner_cpp: error while writing output file: " << out_path << std::endl;
+      return 1;
+    }
+    return 0;
   }
 
   std::vector<std::string> lines;
