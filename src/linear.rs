@@ -287,7 +287,7 @@ impl HybridCounter {
     }
 
     /// Update the counter with a new item
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hash + crate::hash::Hashable>(&mut self, item: &T) {
         if let Some(ref mut linear) = self.linear {
             linear.update(item);
 

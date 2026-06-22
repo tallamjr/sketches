@@ -22,13 +22,11 @@
 
 #[cfg(not(feature = "optimized"))]
 use std::collections::BTreeMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "optimized")]
 use crate::compact_memory::{CompactHashTable, PackedRegisters};
-#[cfg(feature = "optimized")]
-use crate::fast_hash;
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 #[cfg(feature = "optimized")]
 use crate::simd_ops::hyperloglog;
 
@@ -57,48 +55,38 @@ impl HllSketch {
         }
     }
 
-    /// Update the sketch with an item implementing Hash.
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    /// Update the sketch with an item implementing Hashable.
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
+        let hash = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let idx = (hash >> (64 - self.p)) as usize;
+        let w = hash << self.p;
+        let leading = w.leading_zeros().saturating_add(1);
+        let rank = leading.min(64) as u8;
+
         #[cfg(feature = "optimized")]
-        {
-            let hash = fast_hash::fast_hash(item);
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let leading = w.leading_zeros().saturating_add(1);
-            let rank = leading.min(64) as u8;
-            self.registers.update_max(idx, rank);
-        }
+        self.registers.update_max(idx, rank);
 
         #[cfg(not(feature = "optimized"))]
-        {
-            let mut hasher = DefaultHasher::new();
-            item.hash(&mut hasher);
-            let hash = hasher.finish();
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let leading = w.leading_zeros().saturating_add(1);
-            let rank = leading.min(64) as u8;
-            if self.registers[idx] < rank {
-                self.registers[idx] = rank;
-            }
+        if self.registers[idx] < rank {
+            self.registers[idx] = rank;
         }
     }
 
     /// Batch update the sketch with multiple items for better performance.
     #[cfg(feature = "optimized")]
-    pub fn update_batch<T: Hash + Sync>(&mut self, items: &[T]) {
+    pub fn update_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
         use rayon::prelude::*;
 
         // Parallel hashing with rayon for large batches
         let hashes: Vec<u64> = if items.len() > 10000 {
             items
                 .par_iter()
-                .map(|item| fast_hash::fast_hash(item))
+                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
                 .collect()
         } else {
             items
                 .iter()
-                .map(|item| fast_hash::fast_hash(item))
+                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
                 .collect()
         };
 
@@ -125,7 +113,7 @@ impl HllSketch {
 
     /// Batch update fallback for non-optimized builds.
     #[cfg(not(feature = "optimized"))]
-    pub fn update_batch<T: Hash>(&mut self, items: &[T]) {
+    pub fn update_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.update(item);
         }
@@ -302,27 +290,19 @@ impl HllPlusPlusSketch {
         }
     }
 
-    /// Update the sketch with an item implementing Hash.
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    /// Update the sketch with an item implementing Hashable.
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
+        let hash = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let idx = (hash >> (64 - self.p)) as usize;
+        let w = hash << self.p;
+        let leading = w.leading_zeros().saturating_add(1);
+        let rank = leading.min(64) as u8;
+
         #[cfg(feature = "optimized")]
-        {
-            let hash = fast_hash::fast_hash(item);
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let leading = w.leading_zeros().saturating_add(1);
-            let rank = leading.min(64) as u8;
-            self.registers.update_max(idx, rank);
-        }
+        self.registers.update_max(idx, rank);
 
         #[cfg(not(feature = "optimized"))]
         {
-            let mut hasher = DefaultHasher::new();
-            item.hash(&mut hasher);
-            let hash = hasher.finish();
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let leading = w.leading_zeros().saturating_add(1);
-            let rank = leading.min(64) as u8;
             let reg = &mut self.registers[idx];
             if *reg < rank {
                 *reg = rank;
@@ -424,19 +404,19 @@ impl HllPlusPlusSketch {
 
     /// Batch update the sketch with multiple items for better performance.
     #[cfg(feature = "optimized")]
-    pub fn update_batch<T: Hash + Sync>(&mut self, items: &[T]) {
+    pub fn update_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
         use rayon::prelude::*;
 
         // Parallel hashing with rayon for large batches
         let hashes: Vec<u64> = if items.len() > 10000 {
             items
                 .par_iter()
-                .map(|item| fast_hash::fast_hash(item))
+                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
                 .collect()
         } else {
             items
                 .iter()
-                .map(|item| fast_hash::fast_hash(item))
+                .map(|item| hash64_of(&Xxh3Hasher, item, DEFAULT_SEED))
                 .collect()
         };
 
@@ -463,7 +443,7 @@ impl HllPlusPlusSketch {
 
     /// Batch update fallback for non-optimized builds.
     #[cfg(not(feature = "optimized"))]
-    pub fn update_batch<T: Hash>(&mut self, items: &[T]) {
+    pub fn update_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.update(item);
         }
@@ -571,15 +551,15 @@ impl HllPlusPlusSparseSketch {
         }
     }
 
-    /// Update the sketch with an item implementing Hash.
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    /// Update the sketch with an item implementing Hashable.
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
+        let hash = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let idx = (hash >> (64 - self.p)) as usize;
+        let w = hash << self.p;
+        let rank = w.leading_zeros().saturating_add(1).min(64) as u8;
+
         #[cfg(feature = "optimized")]
         {
-            let hash = fast_hash::fast_hash(item);
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let rank = w.leading_zeros().saturating_add(1).min(64) as u8;
-
             if let Some(current) = self.map.get_mut(idx as u64) {
                 if *current < rank {
                     *current = rank;
@@ -591,12 +571,6 @@ impl HllPlusPlusSparseSketch {
 
         #[cfg(not(feature = "optimized"))]
         {
-            let mut hasher = DefaultHasher::new();
-            item.hash(&mut hasher);
-            let hash = hasher.finish();
-            let idx = (hash >> (64 - self.p)) as usize;
-            let w = hash << self.p;
-            let rank = w.leading_zeros().saturating_add(1).min(64) as u8;
             let entry = self.map.entry(idx).or_insert(0);
             if *entry < rank {
                 *entry = rank;
@@ -750,7 +724,7 @@ impl AdaptiveHllPlusPlus {
     }
 
     /// Update the sketch, potentially triggering sparse-to-dense transition.
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         match &mut self.representation {
             HllRepresentation::Sparse(sparse) => {
                 sparse.update(item);
@@ -764,7 +738,7 @@ impl AdaptiveHllPlusPlus {
     }
 
     /// Batch update with automatic transition checking.
-    pub fn update_batch<T: Hash + Sync>(&mut self, items: &[T]) {
+    pub fn update_batch<T: Hashable + Sync>(&mut self, items: &[T]) {
         match &mut self.representation {
             HllRepresentation::Sparse(sparse) => {
                 for item in items {
@@ -939,13 +913,6 @@ fn hash_to_coupon(hash: u64, lg_k: u8) -> u32 {
     let remaining = hash << lg_k;
     let value = remaining.leading_zeros().saturating_add(1).min(63) as u8;
     make_coupon(slot, value)
-}
-
-/// Compute a 64-bit hash for an item using DefaultHasher.
-fn compute_hash<T: Hash>(item: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    item.hash(&mut hasher);
-    hasher.finish()
 }
 
 // -- List mode ---------------------------------------------------------------
@@ -1270,8 +1237,8 @@ impl HllSketchMode {
     }
 
     /// Update the sketch with a hashable item.
-    pub fn update<T: Hash>(&mut self, item: &T) {
-        let hash = compute_hash(item);
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
+        let hash = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
         let coupon = hash_to_coupon(hash, self.lg_k);
         if coupon_value(coupon) == 0 {
             return;
@@ -1432,7 +1399,7 @@ impl HllUnion {
     }
 
     /// Update the union directly with a hashable item.
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         self.gadget.update(item);
     }
 
@@ -2084,5 +2051,16 @@ mod tests {
             (est2 - est).abs() < 1.0,
             "Re-inserting same items should not change estimate: before={est}, after={est2}"
         );
+    }
+
+    #[test]
+    fn hll_estimate_within_bounds_new_hash() {
+        let mut s = HllSketch::new(12);
+        for i in 0u64..100_000 {
+            s.update(&i);
+        }
+        let est = s.estimate();
+        let err = (est - 100_000.0).abs() / 100_000.0;
+        assert!(err < 0.03, "rel error {err} too high");
     }
 }
