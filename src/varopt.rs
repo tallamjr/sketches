@@ -722,6 +722,49 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_preserves_adjusted_weight_sum_invariant() {
+        // The defining VarOpt invariant is that the sum of adjusted weights of
+        // the sample equals the total stream weight. Merging must preserve this:
+        // after merging two reservoirs, the merged sample's adjusted-weight sum
+        // must equal the combined total weight of both streams.
+        let k = 32;
+        let mut s1: VarOptSketch<usize> = VarOptSketch::new(k);
+        let mut s2: VarOptSketch<usize> = VarOptSketch::new(k);
+
+        let mut expected_total = 0.0;
+        for i in 0..1_000 {
+            let w = ((i % 17) + 1) as f64;
+            s1.update(i, w);
+            expected_total += w;
+        }
+        for i in 1_000..2_000 {
+            let w = ((i % 11) + 1) as f64 * 0.5;
+            s2.update(i, w);
+            expected_total += w;
+        }
+
+        s1.merge(&s2);
+
+        // Combined total weight must be tracked exactly.
+        assert!(
+            (s1.get_total_weight() - expected_total).abs() < 1e-6,
+            "merged total weight {} != expected {expected_total}",
+            s1.get_total_weight()
+        );
+
+        // The reservoir must not exceed capacity after merge.
+        assert!(s1.get_num_samples() <= k);
+
+        // Adjusted-weight-sum invariant must hold within tolerance.
+        let adjusted_sum: f64 = s1.get_samples().iter().map(|(_, w)| w).sum();
+        let relative_error = (adjusted_sum - expected_total).abs() / expected_total;
+        assert!(
+            relative_error < 0.02,
+            "post-merge adjusted weight sum {adjusted_sum:.2} should equal total {expected_total:.2} (relative error {relative_error:.5})"
+        );
+    }
+
+    #[test]
     fn test_merge_into_empty() {
         let k = 5;
         let mut sketch1: VarOptSketch<i32> = VarOptSketch::new(k);
