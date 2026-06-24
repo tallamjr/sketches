@@ -13,8 +13,8 @@
 //! - Whang, Vander-Zanden, Taylor. "A Linear-Time Probabilistic Counting Algorithm
 //!   for Database Applications." ACM TODS, 1990.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
 /// Linear Counter for small cardinality estimation
 ///
@@ -70,7 +70,7 @@ impl LinearCounter {
     }
 
     /// Update the counter with a new item
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hash = self.hash_item(item);
         let bit_index = (hash as usize) % self.num_bits;
 
@@ -86,10 +86,8 @@ impl LinearCounter {
     }
 
     /// Hash an item to get a bit position
-    fn hash_item<T: Hash>(&self, item: &T) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        hasher.finish()
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
+        hash64_of(&Xxh3Hasher, item, DEFAULT_SEED)
     }
 
     /// Estimate the cardinality
@@ -238,7 +236,7 @@ impl HybridCounter {
     }
 
     /// Update the counter with a new item
-    pub fn update<T: Hash + crate::hash::Hashable>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         if let Some(ref mut linear) = self.linear {
             linear.update(item);
 
