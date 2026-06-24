@@ -26,11 +26,18 @@
 //! - Efraimidis, Spirakis. "Weighted Random Sampling with a Reservoir."
 //!   Information Processing Letters, 2006.
 
+use crate::serialization::{
+    FAMILY_RESERVOIR_A, FAMILY_RESERVOIR_R, FAMILY_STREAM_SAMPLER, Serializable, SerializationError,
+};
 use rand::prelude::*;
 use rand::rngs::ThreadRng;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
+
+/// Serial format version for the sampler postcard payloads.
+const SAMPLING_SERIAL_VERSION: u8 = 1;
 
 /// Algorithm R: Basic reservoir sampling implementation
 ///
@@ -324,6 +331,7 @@ impl<T: Clone> WeightedReservoirSampler<T> {
 /// Stream processor for reservoir sampling
 ///
 /// Provides a high-level interface for processing streams of data
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamSampler<T: Clone> {
     sampler: ReservoirSamplerA<T>,
     batch_size: usize,
@@ -379,6 +387,66 @@ impl<T: Clone> StreamSampler<T> {
             capacity: self.sampler.capacity(),
             buffer_size: self.buffer.len(),
         }
+    }
+}
+
+impl<T: Clone + Serialize + DeserializeOwned> Serializable for ReservoirSamplerR<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("ReservoirSamplerR decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_RESERVOIR_R
+    }
+
+    fn serial_version(&self) -> u8 {
+        SAMPLING_SERIAL_VERSION
+    }
+}
+
+impl<T: Clone + Serialize + DeserializeOwned> Serializable for ReservoirSamplerA<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("ReservoirSamplerA decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_RESERVOIR_A
+    }
+
+    fn serial_version(&self) -> u8 {
+        SAMPLING_SERIAL_VERSION
+    }
+}
+
+impl<T: Clone + Serialize + DeserializeOwned> Serializable for StreamSampler<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("StreamSampler decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_STREAM_SAMPLER
+    }
+
+    fn serial_version(&self) -> u8 {
+        SAMPLING_SERIAL_VERSION
     }
 }
 
@@ -520,6 +588,58 @@ mod tests {
         assert_eq!(sampler.sample().len(), 0);
         assert_eq!(sampler.items_seen(), 0);
         assert!(!sampler.is_full());
+    }
+
+    #[test]
+    fn test_reservoir_r_serializable_roundtrip() {
+        let mut sampler = ReservoirSamplerR::new(50);
+        for i in 0..10_000 {
+            sampler.add(i);
+        }
+        let sample: Vec<i32> = sampler.sample().to_vec();
+        let seen = sampler.items_seen();
+
+        let bytes = Serializable::to_bytes(&sampler);
+        let restored = ReservoirSamplerR::<i32>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.sample(), sample.as_slice());
+        assert_eq!(restored.items_seen(), seen);
+        assert_eq!(restored.capacity(), 50);
+        assert_eq!(sampler.family_id(), FAMILY_RESERVOIR_R);
+        assert_eq!(sampler.serial_version(), SAMPLING_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn test_reservoir_a_serializable_roundtrip() {
+        let mut sampler = ReservoirSamplerA::new(50);
+        for i in 0..10_000 {
+            sampler.add(i);
+        }
+        let sample: Vec<i32> = sampler.sample().to_vec();
+        let seen = sampler.items_seen();
+
+        let bytes = Serializable::to_bytes(&sampler);
+        let restored = ReservoirSamplerA::<i32>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.sample(), sample.as_slice());
+        assert_eq!(restored.items_seen(), seen);
+        assert_eq!(sampler.family_id(), FAMILY_RESERVOIR_A);
+    }
+
+    #[test]
+    fn test_stream_sampler_serializable_roundtrip() {
+        let mut stream = StreamSampler::new(20, 5);
+        stream.push_batch((0..1000).collect());
+        stream.flush();
+        let sample: Vec<i32> = stream.sample().to_vec();
+        let stats = stream.stats();
+
+        let bytes = Serializable::to_bytes(&stream);
+        let restored = StreamSampler::<i32>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.sample(), sample.as_slice());
+        assert_eq!(restored.stats(), stats);
+        assert_eq!(stream.family_id(), FAMILY_STREAM_SAMPLER);
     }
 
     #[test]

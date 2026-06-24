@@ -9,9 +9,14 @@
 //!   tau = (total_weight - sum_of_heavy_weights) / (k - num_heavy)
 //! ensuring the sum of adjusted weights equals the total stream weight.
 
+use crate::serialization::{FAMILY_VAROPT, Serializable, SerializationError};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Serial format version for the VarOpt postcard payload.
+const VAROPT_SERIAL_VERSION: u8 = 1;
 
 /// Global counter for unique seed generation across sketch instances.
 static SEED_COUNTER: AtomicU64 = AtomicU64::new(0xDEAD_BEEF_CAFE_BABEu64);
@@ -336,6 +341,26 @@ impl<T: Clone> VarOptSketch<T> {
                 self.update(item.clone(), weight);
             }
         }
+    }
+}
+
+impl<T: Clone + Serialize + DeserializeOwned> Serializable for VarOptSketch<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("VarOptSketch decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_VAROPT
+    }
+
+    fn serial_version(&self) -> u8 {
+        VAROPT_SERIAL_VERSION
     }
 }
 
@@ -949,6 +974,45 @@ mod tests {
             (sketch.get_total_weight() - expected_total).abs() < 1e-6,
             "Total weight tracking should be exact"
         );
+    }
+
+    #[test]
+    fn test_varopt_serializable_roundtrip() {
+        let k = 32;
+        let mut sketch: VarOptSketch<u64> = VarOptSketch::new(k);
+        for i in 0..5000u64 {
+            sketch.update(i, ((i % 50) + 1) as f64);
+        }
+
+        let total_weight = sketch.get_total_weight();
+        let count = sketch.count();
+        let num_samples = sketch.get_num_samples();
+        let tau = sketch.get_tau();
+        let samples: Vec<(u64, f64)> = sketch
+            .get_samples()
+            .iter()
+            .map(|(i, w)| (**i, *w))
+            .collect();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let restored = VarOptSketch::<u64>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.count(), count);
+        assert_eq!(restored.get_num_samples(), num_samples);
+        assert!((restored.get_total_weight() - total_weight).abs() < 1e-6);
+        assert!((restored.get_tau() - tau).abs() < 1e-9);
+
+        let restored_samples: Vec<(u64, f64)> = restored
+            .get_samples()
+            .iter()
+            .map(|(i, w)| (**i, *w))
+            .collect();
+        assert_eq!(
+            restored_samples, samples,
+            "sample set must round-trip exactly"
+        );
+        assert_eq!(sketch.family_id(), FAMILY_VAROPT);
+        assert_eq!(sketch.serial_version(), VAROPT_SERIAL_VERSION);
     }
 
     #[test]
