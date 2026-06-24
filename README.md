@@ -68,12 +68,12 @@ Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservo
 - [Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation](#extending-hll-sparse-buffer-variable-length-encoding-and-hybrid-representation)
   - [Theta Sketch Example](#theta-sketch-example)
     - [Minimal Test with Polars](#minimal-test-with-polars-2)
+- [Architecture](#architecture)
 - [Performance](#performance)
-  - [Processing Throughput](#processing-throughput)
-  - [Memory Efficiency](#memory-efficiency)
-  - [Accuracy Comparison](#accuracy-comparison)
-  - [Summary](#summary)
-  - [When to Use Each](#when-to-use-each)
+  - [Accuracy (multi-trial RMSE)](#accuracy-multi-trial-rmse)
+  - [Throughput](#throughput)
+  - [Benchmark harness](#benchmark-harness)
+  - [When to use each](#when-to-use-each)
 - [TPC-H Business Intelligence Benchmarks](#tpc-h-business-intelligence-benchmarks)
 - [Roadmap and Missing Features](#roadmap-and-missing-features)
   - [Not Yet Implemented](#not-yet-implemented)
@@ -717,75 +717,72 @@ print(f"Estimated difference size (Theta): {difference.estimate():.2f}")
 # Estimated difference size (Theta): 76308.22
 ```
 
+## Architecture
+
+The cardinality and set-operation sketches share a small, deliberately simple core:
+
+- **Pluggable hashing.** A single canonical `SketchHasher` (64- and 128-bit) is used in every build, defaulting to [xxh3](https://github.com/Cyan4973/xxHash). This is a deliberate choice, not MurmurHash3, and the serialised format is our own compact little-endian codec, so sketches are not byte-compatible with Apache DataSketches. That is a chosen tradeoff in favour of a uniform internal format. Because absolute throughput is dominated by the hash function, comparing our xxh3 numbers to Apache's MurmurHash3 numbers compares hash functions as much as sketches.
+- **Shared codec and serialisation.** All sketches serialise through a shared little-endian codec behind a uniform `Serializable` trait (the long-tail sketches use postcard). Serialisation round-trips are covered by tests.
+- **Pure scalar Rust.** No SIMD, no jemalloc, no rayon. The earlier `optimized` feature has been removed. The implementation is plain, portable, scalar Rust.
+- **HIP estimators.** HLL and CPC both carry a Historical Inverse Probability (HIP) estimator, which is what brings their accuracy to (or below) the theoretical floor.
+
 ## Performance
 
-**Comparison against Apache DataSketches (industry standard)**
+**Accuracy is measured by multi-trial RMSE, not single runs.** A single accuracy comparison against Apache is statistically meaningless: the spread between trials is larger than the gap between implementations. Earlier versions of this README quoted single-run figures, which have been removed. The numbers below come from the benchmark harness running 100 trials of 100,000 distinct items at `lg_k = 12` (4096 registers), and are regenerable with `make -C benchmarks rmse`.
 
-Benchmarks were conducted comparing this Rust-based implementation with the official Apache DataSketches Python library across key performance metrics.
+### Accuracy (multi-trial RMSE)
 
-### Processing Throughput
+The theoretical error floor for `lg_k = 12` is `1/sqrt(4096) = 0.0156`. Relative-error RMSE over 100 trials x 100,000 distinct items:
 
+| Sketch    | Ours (RMSE) | Apache DataSketches (RMSE) | Verdict                         |
+| --------- | ----------- | -------------------------- | ------------------------------- |
+| HLL       | 0.0122      | 0.0129                     | Ours slightly better, below floor (via HIP) |
+| Theta     | 0.0153      | 0.0144                     | Parity, at the floor            |
+| CPC       | 0.0089      | 0.0084                     | Parity, below the floor         |
+
+All three distinct counters are at parity-or-better against Apache DataSketches, and HLL and CPC sit below the `1/sqrt(k)` floor thanks to their HIP estimators.
+
+![RMSE by sketch and implementation](assets/benchmarks/rmse_comparison.png)
+
+CPC was previously broken (it reported around 173% error). It is now a faithful ICON+HIP port: roughly 0.34% error on a synthetic stream and 1.17% on a real TPC-H column. HLL gained a HIP estimator that moved its RMSE from 0.0175 to 0.0122, taking it from worse-than-Apache to slightly-better-than-Apache and below the floor:
+
+![HLL accuracy before and after HIP](assets/benchmarks/hll_rmse_before_after.png)
+
+### Throughput
+
+Throughput is **machine-dependent** and dominated by the choice of hash function (our xxh3 versus Apache's MurmurHash3), so we do not quote a fixed "Nx faster" claim. As a directional, single-machine snapshot (update operations per second, our implementation): HLL around 63M ops/sec, Theta around 249M ops/sec, CPC around 63M ops/sec. Treat these as illustrative and regenerate them locally with the harness rather than as a precise benchmark.
+
+### Benchmark harness
+
+The `benchmarks/` directory contains everything needed to reproduce the numbers above:
+
+- Three standalone runners (`runner-ours`, `runner-apache-rust`, `runner-cpp`) that emit one shared CSV schema over identical datasets.
+- A Python reporter that prints comparison tables, renders the Tahoma-styled matplotlib plots shown above, and enforces a CI accuracy gate against per-sketch thresholds.
+- A multi-trial RMSE mode that is the only accuracy comparison we treat as meaningful.
+
+```bash
+# Multi-trial RMSE comparison (ours vs apache-rust vs apache-cpp)
+make -C benchmarks rmse
+
+# Single-run comparison table plus throughput, memory and accuracy plots
+make -C benchmarks report
+
+# Accuracy gate (used in CI)
+make -C benchmarks gate
 ```
-HyperLogLog Updates (2M items):
-+---------------------+--------------+-----------------+----------+
-| Implementation      | Time         | Throughput      | Ratio    |
-+---------------------+--------------+-----------------+----------+
-| Apache DataSketches | 0.29s        | 7.1M items/sec | 5.2x     |
-| Our Library         | 1.51s        | 1.3M items/sec | baseline |
-+---------------------+--------------+-----------------+----------+
-```
 
-### Memory Efficiency
-
-```
-HyperLogLog Memory Usage (1M items):
-+---------------------+--------------+-----------------+
-| Implementation      | Memory Usage | Efficiency      |
-+---------------------+--------------+-----------------+
-| Apache DataSketches | 32 KB        | 9x better       |
-| Our Library         | 288 KB       | baseline        |
-+---------------------+--------------+-----------------+
-```
-
-### Accuracy Comparison
-
-```
-HyperLogLog Error Rates:
-+--------------+-------------+-------------+----------+
-| Dataset Size | Our Error   | Apache Error| Winner   |
-+--------------+-------------+-------------+----------+
-| 1,000        | 0.22%       | 0.72%       | Ours     |
-| 10,000       | 2.48%       | 0.72%       | Apache   |
-| 100,000      | 1.27%       | 1.23%       | Tie      |
-| 1,000,000    | 1.77%       | 1.14%       | Apache   |
-+--------------+-------------+-------------+----------+
-```
-
-### Summary
-
-- **Accuracy**: Both libraries achieve less than 3% error rates across all tested cardinalities.
-- **Speed**: Apache DataSketches is approximately 5x faster due to its optimised C++ core.
-- **Memory**: Apache DataSketches uses approximately 9x less memory.
-- **Algorithm coverage**: This library provides 2x more algorithms (18 vs 9).
-- **Safety**: Rust guarantees memory safety and eliminates entire classes of bugs.
-
-Both libraries excel at their core mission: enabling approximate analytics on massive datasets with bounded memory and excellent accuracy.
-
-### When to Use Each
+### When to use each
 
 **Choose this library for:**
 
-- **Algorithm diversity** -- sampling, frequency estimation, specialised sketches
-- **Rich analytics** -- confidence bounds, statistics, merging operations
-- **Memory safety** -- Rust eliminates segfaults and memory leaks
-- **Modern development** -- excellent type safety and error messages
+- **Algorithm diversity**: sampling, frequency estimation, specialised sketches alongside the distinct counters.
+- **Accuracy**: HLL, Theta and CPC are at parity-or-better than Apache DataSketches on multi-trial RMSE.
+- **Memory safety**: Rust eliminates segfaults and memory leaks.
 
 **Choose Apache DataSketches for:**
 
-- **Maximum performance** -- 5x faster processing
-- **Memory constraints** -- 9x lower memory usage
-- **Production scale** -- billions of items daily
-- **Enterprise deployment** -- proven stability
+- **Byte-compatible interchange**: if you need to read or write the official DataSketches serialisation format, which this library deliberately does not.
+- **Ecosystem integration**: proven stability and broad language bindings across the Apache ecosystem.
 
 ## TPC-H Business Intelligence Benchmarks
 
@@ -804,12 +801,11 @@ pytest --nbmake examples/tpch_performance_analysis.ipynb
 - **Unique parts sold** (50K lineitem records)
 - **Orders with line items** (distinct order counting)
 
-**Performance Highlights with Real Data:**
+**Findings with Real Data:**
 
-- **Sub-5% error rates** on critical business metrics
-- **1000x+ memory efficiency** vs traditional exact counting
-- **Millions of items/sec throughput** for streaming analytics
-- **Scalability analysis** from 1K to 50K+ items
+- Low error on distinct-count business metrics (for example, CPC reports around 1.17% relative error on a real TPC-H column).
+- Bounded, fixed-size memory regardless of stream length, versus the linear growth of exact counting.
+- Scalability across cardinalities from thousands to millions of items.
 
 **[TPC-H Analysis Notebook](examples/tpch_performance_analysis.ipynb)**
 
@@ -837,20 +833,19 @@ While this library provides a comprehensive suite of probabilistic data structur
 
 **Performance**
 
-- **SIMD Acceleration** - Framework is ready but actual AVX2/NEON implementations pending
-- **GPU Acceleration** - Metal/CUDA kernels for massive parallel processing
+- **SIMD Acceleration** - The implementation is currently pure scalar Rust; vectorised register updates are a possible future direction.
+- **Apache byte-compatibility** - We use our own compact codec and xxh3 hashing, so the official DataSketches serialisation format is not supported.
 
 **Integration**
 
 - **Polars Integration** - Custom expressions and DataFrame operations
-- **Advanced Serialisation** - Network-optimised protocols beyond basic byte arrays
+- **Advanced Serialisation** - Network-optimised protocols beyond the current compact codec
 
 ### Current Development Priorities
 
 1. **MinHash implementation** -- fills the similarity estimation gap (largest missing domain)
-2. Actual SIMD implementations to replace scalar fallbacks
-3. Polars custom expressions for seamless DataFrame integration
-4. Performance optimisations for Python bindings (batch operations)
+2. Polars custom expressions for seamless DataFrame integration
+3. Performance optimisations for Python bindings (batch operations)
 
 ## License
 
