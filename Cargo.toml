@@ -24,6 +24,12 @@ num_cpus = "1.16"
 name = "sketches"
 crate-type = ["cdylib", "rlib"]
 
+# Criterion micro-benchmarks live under the unified benchmarks/ tree.
+[[bench]]
+name = "sketch_benchmarks"
+path = "benchmarks/criterion/sketch_benchmarks.rs"
+harness = false
+
 [features]
 # Enable Python extension bindings
 extension-module = ["pyo3"]
