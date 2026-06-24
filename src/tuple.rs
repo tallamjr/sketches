@@ -1,6 +1,12 @@
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
+use crate::serialization::{FAMILY_TUPLE, Serializable, SerializationError};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Serial format version for the Tuple sketch postcard payload.
+const TUPLE_SERIAL_VERSION: u8 = 1;
 
 /// Maximum theta value representing the full hash space.
 const MAX_THETA: u64 = u64::MAX;
@@ -35,7 +41,7 @@ pub trait Summary: Clone {
 }
 
 /// A summary that accumulates a sum of f64 values.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DoubleSummary {
     pub value: f64,
 }
@@ -55,7 +61,7 @@ impl Summary for DoubleSummary {
 }
 
 /// A summary that counts occurrences.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CountSummary {
     pub count: u64,
 }
@@ -75,7 +81,7 @@ impl Summary for CountSummary {
 }
 
 /// A summary that accumulates N double values in an array.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArrayOfDoublesSummary {
     pub values: Vec<f64>,
 }
@@ -131,6 +137,7 @@ impl Summary for ArrayOfDoublesSummary {
 ///
 /// Uses an open-addressing hash table with stride-based probing for O(1)
 /// amortised duplicate detection, matching the ThetaSketch design.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TupleSketch<S: Summary> {
     /// Nominal sample size (sketch capacity).
     pub k: usize,
@@ -512,6 +519,25 @@ impl<S: Summary> TupleSketch<S> {
             num_entries: count,
             theta,
         }
+    }
+}
+
+impl<S: Summary + Serialize + DeserializeOwned> Serializable for TupleSketch<S> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("TupleSketch decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_TUPLE
+    }
+
+    fn serial_version(&self) -> u8 {
+        TUPLE_SERIAL_VERSION
     }
 }
 
@@ -1381,6 +1407,49 @@ mod tests {
         for (hash, _) in &retained {
             assert_ne!(*hash, 0);
         }
+    }
+
+    #[test]
+    fn test_tuple_serializable_roundtrip_double_summary() {
+        let mut sk: TupleSketch<DoubleSummary> = TupleSketch::new(4096);
+        for i in 0..2000 {
+            sk.update(&i, (i as f64) + 1.0);
+        }
+        let estimate = sk.estimate();
+        let retained = sk.num_retained();
+        let theta = sk.theta();
+        let summary_42 = sk.get_summary(&42).unwrap().value;
+
+        let bytes = Serializable::to_bytes(&sk);
+        let restored = <TupleSketch<DoubleSummary> as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.num_retained(), retained);
+        assert_eq!(restored.theta(), theta);
+        assert!((restored.estimate() - estimate).abs() < 1e-6);
+        assert!((restored.get_summary(&42).unwrap().value - summary_42).abs() < 1e-9);
+        assert_eq!(sk.family_id(), FAMILY_TUPLE);
+        assert_eq!(sk.serial_version(), TUPLE_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn test_tuple_serializable_roundtrip_with_sampling() {
+        // Drive past k so theta drops below MAX and a rebuild occurs; the
+        // serialised hash table and theta must reconstruct exactly.
+        let k = 512;
+        let mut sk: TupleSketch<CountSummary> = TupleSketch::new(k);
+        for i in 0..50_000 {
+            sk.update(&i, 0.0);
+        }
+        assert!(sk.theta() < MAX_THETA);
+        let estimate = sk.estimate();
+        let retained = sk.num_retained();
+
+        let bytes = Serializable::to_bytes(&sk);
+        let restored = <TupleSketch<CountSummary> as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.num_retained(), retained);
+        assert_eq!(restored.theta(), sk.theta());
+        assert!((restored.estimate() - estimate).abs() < 1e-6);
     }
 
     #[test]
