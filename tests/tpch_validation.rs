@@ -119,7 +119,7 @@ fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
     let s1: HashSet<_> = p1.iter().cloned().collect();
     let s2: HashSet<_> = p2.iter().cloned().collect();
     let true_u = s1.union(&s2).count() as f64;
-    let true_i = s1.intersection(&s2).count() as f64;
+    let _true_i = s1.intersection(&s2).count() as f64;
 
     let mut sk1 = ThetaSketch::new(1024);
     let mut sk2 = ThetaSketch::new(1024);

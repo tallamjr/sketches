@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn hashable_routes_primitives_and_strings() {
-        let h = Xxh3Hasher::default();
+        let h = Xxh3Hasher;
         // deterministic
         assert_eq!(
             hash64_of(&h, &"hello", DEFAULT_SEED),

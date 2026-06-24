@@ -1,7 +1,8 @@
 //! Cross-platform binary serialisation for sketches.
 //!
 //! HLL and Theta use the shared codec format (MAGIC + SketchHeader + payload).
-//! All other sketches use a legacy Apache DataSketches-compatible preamble.
+//! All other sketches use this crate's own preamble layout; the format is
+//! defined by this codec and is not interchangeable with any external library.
 //! All multi-byte values are stored in little-endian byte order.
 
 use std::fmt;
@@ -393,9 +394,9 @@ const THETA_FLAG_EMPTY: u8 = 1 << 2;
 const THETA_FLAG_COMPACT: u8 = 1 << 3;
 const THETA_FLAG_ORDERED: u8 = 1 << 4;
 
-/// A simple seed hash derived from DefaultHasher's implicit seed. We use a
-/// fixed constant here because the Rust DefaultHasher does not expose a
-/// configurable seed.
+/// Opaque 2-byte tag written into our Theta header. It is a fixed constant
+/// that identifies the seed used for this crate's hashing; it is part of our
+/// own format and is not derived from or compatible with any external library.
 const THETA_SEED_HASH: u16 = 0x93CC;
 
 // ---------------------------------------------------------------------------

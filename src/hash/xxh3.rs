@@ -25,7 +25,7 @@ mod tests {
     #[test]
     fn avalanche_smoke() {
         // sequential keys should not collide in 64 bits over a small range
-        let h = Xxh3Hasher::default();
+        let h = Xxh3Hasher;
         let mut seen = std::collections::HashSet::new();
         for i in 0u64..10_000 {
             assert!(seen.insert(h.hash64(&i.to_le_bytes(), DEFAULT_SEED)));
