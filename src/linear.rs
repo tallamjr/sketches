@@ -15,12 +15,19 @@
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
+use crate::serialization::{FAMILY_HYBRID, FAMILY_LINEAR, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
+
+/// Serial format version for LinearCounter and HybridCounter postcard payloads.
+const LINEAR_SERIAL_VERSION: u8 = 1;
+const HYBRID_SERIAL_VERSION: u8 = 1;
 
 /// Linear Counter for small cardinality estimation
 ///
 /// Linear Counter is more accurate than HyperLogLog for small cardinalities (< 1000)
 /// and serves as an efficient preprocessing step before transitioning to HLL.
 /// It's based on the coupon collector problem and uses a simple bit array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinearCounter {
     bit_array: Vec<u64>,
     num_bits: usize,
@@ -181,6 +188,26 @@ impl LinearCounter {
     }
 }
 
+impl Serializable for LinearCounter {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("LinearCounter decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_LINEAR
+    }
+
+    fn serial_version(&self) -> u8 {
+        LINEAR_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Linear Counter
 #[derive(Debug, Clone)]
 pub struct LinearCounterStats {
@@ -315,6 +342,65 @@ impl HybridCounter {
     }
 }
 
+/// Serialisable snapshot of a HybridCounter.
+///
+/// HybridCounter holds an optional `HllSketch`, which is serialised through its
+/// own `Serializable` codec rather than serde. The active component (Linear or
+/// HLL) is captured as a byte payload alongside the scalar configuration so the
+/// counter can be reconstructed exactly in its current mode.
+#[derive(Serialize, Deserialize)]
+struct HybridSnapshot {
+    linear_bytes: Option<Vec<u8>>,
+    hll_bytes: Option<Vec<u8>>,
+    transition_threshold: usize,
+    lg_k: u8,
+}
+
+impl Serializable for HybridCounter {
+    fn to_bytes(&self) -> Vec<u8> {
+        let linear_bytes = self.linear.as_ref().map(Serializable::to_bytes);
+        let hll_bytes = self
+            .hll
+            .as_ref()
+            .map(<crate::hll::HllSketch as Serializable>::to_bytes);
+        let snapshot = HybridSnapshot {
+            linear_bytes,
+            hll_bytes,
+            transition_threshold: self.transition_threshold,
+            lg_k: self.lg_k,
+        };
+        postcard::to_allocvec(&snapshot).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        let snapshot: HybridSnapshot = postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("HybridCounter decode failed: {e}"))
+        })?;
+        let linear = match snapshot.linear_bytes {
+            Some(ref b) => Some(LinearCounter::from_bytes(b)?),
+            None => None,
+        };
+        let hll = match snapshot.hll_bytes {
+            Some(ref b) => Some(<crate::hll::HllSketch as Serializable>::from_bytes(b)?),
+            None => None,
+        };
+        Ok(HybridCounter {
+            linear,
+            hll,
+            transition_threshold: snapshot.transition_threshold,
+            lg_k: snapshot.lg_k,
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_HYBRID
+    }
+
+    fn serial_version(&self) -> u8 {
+        HYBRID_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Hybrid Counter
 #[derive(Debug, Clone)]
 pub struct HybridCounterStats {
@@ -436,6 +522,75 @@ mod tests {
         assert_eq!(stats.mode, "Linear Counter");
         assert!(stats.transition_threshold > 0);
         assert!(stats.memory_usage > 0);
+    }
+
+    #[test]
+    fn test_linear_counter_serializable_roundtrip() {
+        let mut lc = LinearCounter::new(4096);
+        for i in 0..500 {
+            lc.update(&format!("item_{i}"));
+        }
+        let estimate = lc.estimate();
+        let bits_set = lc.bits_set;
+
+        let bytes = Serializable::to_bytes(&lc);
+        let restored = LinearCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(
+            restored.bits_set, bits_set,
+            "bits_set must round-trip exactly"
+        );
+        assert!(
+            (restored.estimate() - estimate).abs() < 1e-6,
+            "estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
+        assert_eq!(lc.family_id(), FAMILY_LINEAR);
+        assert_eq!(lc.serial_version(), LINEAR_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn test_hybrid_counter_roundtrip_linear_mode() {
+        let mut hybrid = HybridCounter::new(8192, 12, 100_000);
+        for i in 0..200 {
+            hybrid.update(&i);
+        }
+        assert_eq!(hybrid.mode(), "Linear Counter");
+        let estimate = hybrid.estimate();
+
+        let bytes = Serializable::to_bytes(&hybrid);
+        let restored = HybridCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.mode(), "Linear Counter");
+        assert!(
+            (restored.estimate() - estimate).abs() < 1e-6,
+            "linear-mode estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
+        assert_eq!(hybrid.family_id(), FAMILY_HYBRID);
+    }
+
+    #[test]
+    fn test_hybrid_counter_roundtrip_hll_mode() {
+        let mut hybrid = HybridCounter::new(2048, 12, 200);
+        for i in 0..5000 {
+            hybrid.update(&i);
+        }
+        assert_eq!(hybrid.mode(), "HyperLogLog");
+        let estimate = hybrid.estimate();
+
+        let bytes = Serializable::to_bytes(&hybrid);
+        let restored = HybridCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.mode(), "HyperLogLog");
+        assert!(
+            (restored.estimate() - estimate).abs() < 1.0,
+            "HLL-mode estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
     }
 
     #[test]

@@ -25,6 +25,20 @@ pub const FAMILY_TDIGEST: u8 = 20;
 pub const FAMILY_KLL: u8 = 15;
 pub const FAMILY_REQ: u8 = 17;
 
+// Family IDs for this crate's long-tail sketches. These are not part of the
+// Apache DataSketches standard; they are assigned locally to give every sketch
+// a distinct identifier within our own postcard-based serialisation.
+pub const FAMILY_AOD: u8 = 200;
+pub const FAMILY_LINEAR: u8 = 201;
+pub const FAMILY_HYBRID: u8 = 202;
+pub const FAMILY_RESERVOIR_R: u8 = 203;
+pub const FAMILY_RESERVOIR_A: u8 = 204;
+pub const FAMILY_STREAM_SAMPLER: u8 = 205;
+pub const FAMILY_VAROPT: u8 = 206;
+pub const FAMILY_TUPLE: u8 = 207;
+pub const FAMILY_FREQUENT: u8 = 208;
+pub const FAMILY_TDIGEST_LOCAL: u8 = 209;
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------

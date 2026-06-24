@@ -24,8 +24,12 @@
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
+use crate::serialization::{FAMILY_AOD, Serializable, SerializationError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Serial format version for the AOD postcard payload.
+const AOD_SERIAL_VERSION: u8 = 1;
 
 /// Configuration for AOD sketch creation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +53,7 @@ impl Default for AodConfig {
 }
 
 /// Entry in an AOD sketch containing a hash and array of doubles
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AodEntry {
     /// Hash value of the key
     pub hash: u64,
@@ -320,15 +324,39 @@ impl AodSketch {
         self.clone()
     }
 
-    /// Serialize sketch to bytes using compact postcard binary encoding
+    /// Serialize sketch to bytes using compact postcard binary encoding.
+    ///
+    /// Delegates to the [`Serializable`] trait so there is a single
+    /// serialisation code path shared with the rest of the library.
     pub fn to_bytes(&self) -> Vec<u8> {
-        postcard::to_allocvec(self)
-            .expect("AOD sketch serialization cannot fail for in-memory data")
+        Serializable::to_bytes(self)
     }
 
-    /// Deserialize sketch from bytes
+    /// Deserialize sketch from bytes.
+    ///
+    /// Delegates to the [`Serializable`] trait, converting the structured
+    /// [`SerializationError`] into a `String` for this convenience signature.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        postcard::from_bytes(bytes).map_err(|e| format!("AOD deserialization failed: {e}"))
+        <Self as Serializable>::from_bytes(bytes).map_err(|e| e.to_string())
+    }
+}
+
+impl Serializable for AodSketch {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("AOD decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_AOD
+    }
+
+    fn serial_version(&self) -> u8 {
+        AOD_SERIAL_VERSION
     }
 }
 
@@ -498,6 +526,27 @@ mod tests {
             error < 0.05,
             "AOD estimate {estimate} too far from {n} (relative error {error})"
         );
+    }
+
+    #[test]
+    fn test_aod_serializable_trait_roundtrip() {
+        let mut sketch = AodSketch::with_capacity_and_values(4096, 3);
+        for i in 0..1000 {
+            sketch
+                .update(&format!("key_{i}"), &[i as f64, (i * 2) as f64, 1.0])
+                .unwrap();
+        }
+        let estimate = sketch.estimate();
+        let sums = sketch.column_sums();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let restored = <AodSketch as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.len(), sketch.len());
+        assert!((restored.estimate() - estimate).abs() < 1e-6);
+        assert_eq!(restored.column_sums(), sums);
+        assert_eq!(sketch.family_id(), FAMILY_AOD);
+        assert_eq!(sketch.serial_version(), AOD_SERIAL_VERSION);
     }
 
     #[test]
