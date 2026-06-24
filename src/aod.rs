@@ -38,8 +38,6 @@ pub struct AodConfig {
     pub capacity: usize,
     /// Number of double values per entry
     pub num_values: usize,
-    /// Random seed for reproducible hashing
-    pub seed: u64,
 }
 
 impl Default for AodConfig {
@@ -47,7 +45,6 @@ impl Default for AodConfig {
         Self {
             capacity: 4096, // Default size similar to Apache DataSketches
             num_values: 1,
-            seed: 0,
         }
     }
 }
@@ -101,7 +98,6 @@ impl AodSketch {
         Self::with_config(AodConfig {
             capacity,
             num_values,
-            seed: 0,
         })
     }
 
