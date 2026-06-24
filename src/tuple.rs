@@ -1,6 +1,6 @@
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 /// Maximum theta value representing the full hash space.
 const MAX_THETA: u64 = u64::MAX;
@@ -175,10 +175,9 @@ impl<S: Summary> TupleSketch<S> {
     /// The item is hashed to determine identity. If the item is new, a fresh
     /// summary is created via `Summary::new()` and then updated. If the item
     /// already exists, its existing summary is updated in place.
-    pub fn update<T: Hash>(&mut self, item: &T, value: f64) {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        let hash = hasher.finish();
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, value: f64) {
+        let h = hash128_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash = (h >> 64) as u64;
 
         // The hash value 0 is reserved as the empty sentinel.
         let hash = if hash == 0 { 1 } else { hash };
@@ -227,10 +226,9 @@ impl<S: Summary> TupleSketch<S> {
     ///
     /// Returns `None` if the item is not in the sketch (either never inserted,
     /// or evicted during sampling).
-    pub fn get_summary<T: Hash>(&self, item: &T) -> Option<&S> {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        let hash = hasher.finish();
+    pub fn get_summary<T: Hashable + ?Sized>(&self, item: &T) -> Option<&S> {
+        let h = hash128_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash = (h >> 64) as u64;
         let hash = if hash == 0 { 1 } else { hash };
 
         if hash >= self.theta {
@@ -968,6 +966,55 @@ mod tests {
         // We cannot look up by original key after union (we only have hash values),
         // but we can verify the count is correct.
         assert_eq!(map.len(), 300);
+    }
+
+    #[test]
+    fn test_double_summary_aggregates_overlapping_keys_on_union() {
+        // Lock the documented DoubleSummary aggregation behaviour: when two
+        // sketches share keys, the union must SUM the per-key summary values,
+        // not drop or overwrite them. We keep all keys below k so no sampling
+        // occurs and every summary is retained, letting us check exact totals.
+        let k = 4096;
+        let mut a: TupleSketch<DoubleSummary> = TupleSketch::new(k);
+        let mut b: TupleSketch<DoubleSummary> = TupleSketch::new(k);
+
+        // Keys 0..50 appear in both, each contributing 2.0 in a and 5.0 in b.
+        for i in 0..50 {
+            a.update(&i, 2.0);
+            b.update(&i, 5.0);
+        }
+        // Keys 50..80 only in a, keys 80..110 only in b.
+        for i in 50..80 {
+            a.update(&i, 2.0);
+        }
+        for i in 80..110 {
+            b.update(&i, 5.0);
+        }
+
+        let u = a.union(&b);
+        // 50 shared + 30 a-only + 30 b-only = 110 distinct keys.
+        assert_eq!(u.num_retained(), 110);
+
+        // Sum of all summary values must equal the sum of every contribution:
+        //   shared:  50 * (2.0 + 5.0) = 350.0
+        //   a-only:  30 * 2.0         =  60.0
+        //   b-only:  30 * 5.0         = 150.0
+        // total = 560.0
+        let total: f64 = u.to_summary_map().values().map(|s| s.value).sum();
+        assert!(
+            (total - 560.0).abs() < 1e-9,
+            "union of DoubleSummary must sum overlapping values: expected 560.0, got {total}"
+        );
+
+        // Verify per-key merged values directly for the shared keys via get_summary.
+        for i in 0..50 {
+            let s = u.get_summary(&i).expect("shared key must survive union");
+            assert!(
+                (s.value - 7.0).abs() < 1e-9,
+                "shared key {i} should aggregate to 7.0, got {}",
+                s.value
+            );
+        }
     }
 
     #[test]
