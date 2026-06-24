@@ -6,6 +6,8 @@ build-backend = "maturin"
 
 [project]
 name = "rusty-sketches"
+# Version is supplied by maturin from Cargo.toml (single source of truth).
+dynamic = ["version"]
 description = "Python bindings for Sketches implemented in Rust via PyO3"
 readme = "README.md"
 authors = [

@@ -27,19 +27,23 @@ Probabilistic data structures do not need collision resistance or preimage resis
 
 ### What This Library Uses
 
-- **Default mode**: Rust's `DefaultHasher` (SipHash-2-4). Provides good uniformity
-  and is the standard library default. Slightly slower than alternatives but
-  cryptographically motivated design gives excellent distribution.
+A single canonical, pluggable `SketchHasher` is used in every build, providing both
+64-bit and 128-bit hashes. It defaults to [xxh3](https://github.com/Cyan4973/xxHash),
+a fast non-cryptographic hash with strong avalanche behaviour.
 
-- **Optimised mode** (`--features optimized`): Custom `fast_hash` using FxHash-style
-  multiplication and bit mixing. ~3x faster than SipHash for integer keys.
+This is a deliberate choice. It is **not** MurmurHash3, and the serialised sketch
+format is our own compact little-endian codec, so sketches are **not** byte-compatible
+with Apache DataSketches. There is no separate "optimised" hash mode: the earlier
+`optimized` feature (and the SipHash/FxHash split it implied) has been removed, and the
+implementation is pure scalar Rust throughout.
 
 ### Guidance from Literature
 
 Gakhov (2019) recommends MurmurHash3, CityHash, or FarmHash for probabilistic data
 structures. The key insight: cryptographic hash functions (MD5, SHA-1, SHA-256) are
 unnecessary and waste CPU cycles. A non-cryptographic hash with good avalanche
-properties is sufficient and dramatically faster.
+properties is sufficient and dramatically faster. We follow that guidance with xxh3,
+which is in the same family of fast, well-distributed non-cryptographic hashes.
 
 > "Non-cryptographic functions simply have to be fast and guarantee a low probability
 > of collisions, allowing a lot of data to be quickly hashed with a reasonable error
@@ -71,6 +75,15 @@ fn estimate() -> f64 {
 - **Space Complexity**: O(2^p) registers, each ~6 bits
 - **Accuracy**: ~1.04/√m relative error (m = 2^p)
 - **Memory**: Fixed size regardless of cardinality
+
+**HIP estimation.** Our `HllSketch` additionally maintains a Historical Inverse
+Probability (HIP) estimator: an incremental accumulator updated each time a register's
+rank increases, falling back to a composite estimator when updates arrive out of order
+(for example after a merge), with the HIP state persisted through serialisation. HIP is
+what takes HLL below the `1/sqrt(k)` floor. Measured over 100 trials of 100,000 distinct
+items at `lg_k = 12`, this moved HLL RMSE from 0.0175 (pre-HIP) to 0.0122, slightly
+better than Apache DataSketches (0.0129) and below the 0.0156 floor. See the README for
+the full multi-trial RMSE table.
 
 #### **HyperLogLog++ (Advanced)**
 
@@ -129,8 +142,15 @@ fn update(&mut self, item: &str) {
 
 - **Time Complexity**: O(1) average, O(n) for compression events
 - **Space Complexity**: Best compression of all algorithms
-- **Accuracy**: Similar to HLL but smaller serialized size
+- **Accuracy**: Similar to HLL but smaller serialised size
 - **Memory**: Multi-mode adaptive compression
+
+**Faithful ICON+HIP port.** Our CPC is a faithful port of the Apache DataSketches
+algorithm, using the ICON estimator together with HIP (and the kxp running term). An
+earlier version of this implementation was broken and reported around 173% error; the
+port fixed it. Measured over 100 trials of 100,000 distinct items at `lg_k = 12`, CPC
+RMSE is 0.0089 versus Apache's 0.0084 (parity, both below the 0.0156 floor), and on a
+real TPC-H column CPC reports around 1.17% relative error.
 
 ---
 
@@ -491,9 +511,9 @@ fn update(&mut self, item: &str) {
 
 | Algorithm          | Time/Update    | Space         | Accuracy         | Special Properties      |
 | ------------------ | -------------- | ------------- | ---------------- | ----------------------- |
-| **HLL**            | O(1)           | O(2^p)        | ~1%              | Fixed memory            |
+| **HLL**            | O(1)           | O(2^p)        | RMSE 0.0122 at lg_k=12 | Fixed memory, HIP estimator |
 | **HLL++**          | O(1) amortized | O(k) → O(2^p) | ~0.5%            | Adaptive memory         |
-| **CPC**            | O(1) average   | Minimal       | ~1%              | Best compression        |
+| **CPC**            | O(1) average   | Minimal       | RMSE 0.0089 at lg_k=12 | Best compression, ICON+HIP |
 | **Linear Counter** | O(1)           | O(m)          | <1% for small n  | Exact for small sets    |
 | **Algorithm R**    | O(1)           | O(k)          | Exact            | Simple uniform sampling |
 | **Algorithm A**    | O(1)           | O(k)          | Exact            | 19x faster than R       |
