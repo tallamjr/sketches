@@ -48,7 +48,7 @@ fn kll_median_within_rank_error() {
 
 #[test]
 fn countmin_never_underestimates() {
-    let mut c = CountMinSketch::new(2048, 5, false, false);
+    let mut c = CountMinSketch::new(2048, 5, false);
     for _ in 0..500 {
         c.increment(&"hot");
     }

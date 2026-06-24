@@ -18,7 +18,7 @@ fn main() {
     println!("{}", "-".repeat(60));
 
     for &n in &test_sizes {
-        let mut lc = LinearCounter::new(8192, false);
+        let mut lc = LinearCounter::new(8192);
         let mut hll = HllSketch::new(12); // 2^12 = 4096 buckets
 
         // Add n unique items to both
@@ -47,7 +47,7 @@ fn main() {
     println!("\n2. Memory Usage Comparison");
     println!("{}", "-".repeat(25));
 
-    let lc_8k = LinearCounter::new(8192, false);
+    let lc_8k = LinearCounter::new(8192);
     let lc_stats = lc_8k.statistics();
 
     println!("Linear Counter (8K bits): {} bytes", lc_stats.memory_usage);
@@ -115,7 +115,7 @@ fn main() {
 
     // Linear Counter performance
     let start = Instant::now();
-    let mut lc_perf = LinearCounter::new(16384, false);
+    let mut lc_perf = LinearCounter::new(16384);
     for i in 0..n_items {
         lc_perf.update(&format!("item_{}", i % 10000)); // Some duplicates
     }
@@ -178,7 +178,7 @@ fn main() {
     println!("\n5. Fill Ratio and Transition Analysis");
     println!("{}", "-".repeat(35));
 
-    let mut lc_analysis = LinearCounter::new(4096, false);
+    let mut lc_analysis = LinearCounter::new(4096);
 
     println!(
         "{:<8} {:<12} {:<10} {:<15}",
@@ -219,7 +219,7 @@ fn main() {
     println!("{}", "-".repeat(45));
 
     for &bits in &bit_sizes {
-        let mut lc_size = LinearCounter::new(bits, false);
+        let mut lc_size = LinearCounter::new(bits);
 
         // Add test items
         for i in 0..test_cardinality {

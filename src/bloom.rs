@@ -30,7 +30,6 @@ pub struct BloomFilter {
     bit_array: Vec<u64>,
     num_bits: usize,
     num_hash_functions: usize,
-    use_simd: bool,
 }
 
 impl BloomFilter {
@@ -39,8 +38,7 @@ impl BloomFilter {
     /// # Arguments
     /// * `capacity` - Expected number of elements
     /// * `error_rate` - Desired false positive rate (e.g., 0.01 for 1%)
-    /// * `use_simd` - Whether to use SIMD optimizations (when available)
-    pub fn new(capacity: usize, error_rate: f64, use_simd: bool) -> Self {
+    pub fn new(capacity: usize, error_rate: f64) -> Self {
         assert!(capacity > 0, "Capacity must be greater than 0");
         assert!(
             error_rate > 0.0 && error_rate < 1.0,
@@ -51,14 +49,12 @@ impl BloomFilter {
         let num_bits = Self::calculate_num_bits(capacity, error_rate);
         let num_hash_functions = Self::calculate_num_hash_functions(num_bits, capacity);
 
-        // Use u64 chunks for better SIMD alignment
         let num_u64s = num_bits.div_ceil(64);
 
         BloomFilter {
             bit_array: vec![0u64; num_u64s],
             num_bits,
             num_hash_functions,
-            use_simd,
         }
     }
 
@@ -77,23 +73,13 @@ impl BloomFilter {
     /// Add an element to the filter
     pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.num_hash_functions >= 4 {
-            self.set_bits_simd(&hashes);
-        } else {
-            self.set_bits_scalar(&hashes);
-        }
+        self.set_bits_scalar(&hashes);
     }
 
     /// Check if an element might be in the filter
     pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.num_hash_functions >= 4 {
-            self.check_bits_simd(&hashes)
-        } else {
-            self.check_bits_scalar(&hashes)
-        }
+        self.check_bits_scalar(&hashes)
     }
 
     /// Generate hash values for an item using double hashing with xxh3
@@ -138,16 +124,6 @@ impl BloomFilter {
             }
         }
         true
-    }
-
-    /// Set bits using scalar operations (SIMD path removed)
-    fn set_bits_simd(&mut self, positions: &[usize]) {
-        self.set_bits_scalar(positions);
-    }
-
-    /// Check bits using scalar operations (SIMD path removed)
-    fn check_bits_simd(&self, positions: &[usize]) -> bool {
-        self.check_bits_scalar(positions)
     }
 
     /// Batch add multiple elements
@@ -197,7 +173,6 @@ impl BloomFilter {
             bits_set,
             fill_ratio: bits_set as f64 / self.num_bits as f64,
             false_positive_probability: self.false_positive_probability(),
-            uses_simd: self.use_simd,
         }
     }
 }
@@ -210,7 +185,6 @@ pub struct BloomFilterStats {
     pub bits_set: usize,
     pub fill_ratio: f64,
     pub false_positive_probability: f64,
-    pub uses_simd: bool,
 }
 
 /// Counting Bloom Filter - allows deletions
@@ -300,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_bloom_filter_basic() {
-        let mut filter = BloomFilter::new(1000, 0.01, false);
+        let mut filter = BloomFilter::new(1000, 0.01);
 
         // Add some items
         filter.add(&"hello");
@@ -317,27 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn test_bloom_filter_simd() {
-        let mut filter_simd = BloomFilter::new(1000, 0.01, true);
-        let mut filter_standard = BloomFilter::new(1000, 0.01, false);
-
-        let test_items = ["item1", "item2", "item3", "item4", "item5"];
-
-        // Add same items to both filters
-        for item in &test_items {
-            filter_simd.add(item);
-            filter_standard.add(item);
-        }
-
-        // Both should have same results
-        for item in &test_items {
-            assert_eq!(filter_simd.contains(item), filter_standard.contains(item));
-        }
-    }
-
-    #[test]
     fn test_false_positive_rate() {
-        let mut filter = BloomFilter::new(1000, 0.01, false);
+        let mut filter = BloomFilter::new(1000, 0.01);
 
         // Add 1000 items
         for i in 0..1000 {
@@ -387,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_filter_parameters() {
-        let filter = BloomFilter::new(10000, 0.001, false);
+        let filter = BloomFilter::new(10000, 0.001);
         let stats = filter.statistics();
 
         assert!(stats.num_bits > 0);
@@ -398,7 +353,7 @@ mod tests {
 
     #[test]
     fn bloom_fpr_reasonable_new_hash() {
-        let mut b = BloomFilter::new(10_000, 0.01, false);
+        let mut b = BloomFilter::new(10_000, 0.01);
         for i in 0u64..10_000 {
             b.add(&i);
         }

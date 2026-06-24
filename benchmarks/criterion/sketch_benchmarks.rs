@@ -91,7 +91,7 @@ fn bench_bloom_filter(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::new("bloom_updates", size), size, |b, _| {
             b.iter(|| {
-                let mut filter = BloomFilter::new(*size, 0.01, false);
+                let mut filter = BloomFilter::new(*size, 0.01);
                 for item in &data {
                     filter.add(black_box(item));
                 }
@@ -114,7 +114,7 @@ fn bench_count_min_sketch(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::new("cms_updates", size), size, |b, _| {
             b.iter(|| {
-                let mut sketch = CountMinSketch::new(1000, 5, false, false);
+                let mut sketch = CountMinSketch::new(1000, 5, false);
                 for item in &data {
                     sketch.increment(black_box(item));
                 }

@@ -34,12 +34,11 @@ fn row_seed(base_seed: u64, row: usize) -> u64 {
     base_seed.wrapping_add((row as u64).wrapping_mul(0x9E3779B97F4A7C15))
 }
 
-/// Count-Min Sketch for frequency estimation with optional SIMD optimizations
+/// Count-Min Sketch for frequency estimation
 pub struct CountMinSketch {
     width: usize,
     depth: usize,
     table: Vec<Vec<u64>>,
-    use_simd: bool,
     conservative_update: bool,
 }
 
@@ -49,16 +48,14 @@ impl CountMinSketch {
     /// # Arguments
     /// * `width` - Number of buckets per row (affects accuracy)
     /// * `depth` - Number of hash functions/rows (affects probability of error)
-    /// * `use_simd` - Whether to use SIMD optimizations when available
     /// * `conservative_update` - Whether to use conservative update (reduces overestimation)
-    pub fn new(width: usize, depth: usize, use_simd: bool, conservative_update: bool) -> Self {
+    pub fn new(width: usize, depth: usize, conservative_update: bool) -> Self {
         assert!(width > 0 && depth > 0, "Width and depth must be positive");
 
         CountMinSketch {
             width,
             depth,
             table: vec![vec![0u64; width]; depth],
-            use_simd,
             conservative_update,
         }
     }
@@ -68,14 +65,8 @@ impl CountMinSketch {
     /// # Arguments
     /// * `epsilon` - Maximum relative error (e.g., 0.01 for 1% error)
     /// * `delta` - Probability of exceeding the error bound (e.g., 0.01 for 1% probability)
-    /// * `use_simd` - Whether to use SIMD optimizations
     /// * `conservative_update` - Whether to use conservative update
-    pub fn with_error_bounds(
-        epsilon: f64,
-        delta: f64,
-        use_simd: bool,
-        conservative_update: bool,
-    ) -> Self {
+    pub fn with_error_bounds(epsilon: f64, delta: f64, conservative_update: bool) -> Self {
         assert!(
             epsilon > 0.0 && epsilon < 1.0,
             "Epsilon must be between 0 and 1"
@@ -85,18 +76,13 @@ impl CountMinSketch {
         let width = (std::f64::consts::E / epsilon).ceil() as usize;
         let depth = (1.0 / delta).ln().ceil() as usize;
 
-        Self::new(width, depth, use_simd, conservative_update)
+        Self::new(width, depth, conservative_update)
     }
 
     /// Update the count for an item
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, count: u64) {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.depth >= 4 {
-            self.update_chunked(&hashes, count);
-        } else {
-            self.update_scalar(&hashes, count);
-        }
+        self.update_scalar(&hashes, count);
     }
 
     /// Increment the count for an item by 1
@@ -107,12 +93,7 @@ impl CountMinSketch {
     /// Estimate the frequency of an item
     pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.depth >= 4 {
-            self.estimate_chunked(&hashes)
-        } else {
-            self.estimate_scalar(&hashes)
-        }
+        self.estimate_scalar(&hashes)
     }
 
     /// Generate hash values for an item using one independent xxh3 hash per row.
@@ -155,114 +136,6 @@ impl CountMinSketch {
         }
 
         min_count
-    }
-
-    /// Update counts using chunked processing (NOT true SIMD - just batch optimization)
-    fn update_chunked(&mut self, hashes: &[usize], count: u64) {
-        // Process multiple rows in batches for potential compiler optimization
-        if hashes.len() >= 4 && self.depth >= 4 {
-            if self.conservative_update {
-                let current_min = self.estimate_chunked(hashes);
-                // Process 4 rows at a time
-                let chunks = hashes.chunks_exact(4);
-                let remainder = chunks.remainder();
-
-                for (chunk_idx, chunk) in chunks.enumerate() {
-                    let base_row = chunk_idx * 4;
-
-                    // Load 4 values in sequence and compare with minimum
-                    let val0 = self.table[base_row][chunk[0]];
-                    let val1 = self.table[base_row + 1][chunk[1]];
-                    let val2 = self.table[base_row + 2][chunk[2]];
-                    let val3 = self.table[base_row + 3][chunk[3]];
-
-                    // Update only if equal to minimum (regular scalar comparisons)
-                    if val0 == current_min {
-                        self.table[base_row][chunk[0]] = val0.saturating_add(count);
-                    }
-                    if val1 == current_min {
-                        self.table[base_row + 1][chunk[1]] = val1.saturating_add(count);
-                    }
-                    if val2 == current_min {
-                        self.table[base_row + 2][chunk[2]] = val2.saturating_add(count);
-                    }
-                    if val3 == current_min {
-                        self.table[base_row + 3][chunk[3]] = val3.saturating_add(count);
-                    }
-                }
-
-                // Handle remaining rows
-                for (i, &col) in remainder.iter().enumerate() {
-                    let row = hashes.len() - remainder.len() + i;
-                    if self.table[row][col] == current_min {
-                        self.table[row][col] = self.table[row][col].saturating_add(count);
-                    }
-                }
-            } else {
-                // Standard update with chunked processing
-                let chunks = hashes.chunks_exact(4);
-                let remainder = chunks.remainder();
-
-                for (chunk_idx, chunk) in chunks.enumerate() {
-                    let base_row = chunk_idx * 4;
-
-                    // Sequential saturating addition for 4 positions
-                    self.table[base_row][chunk[0]] =
-                        self.table[base_row][chunk[0]].saturating_add(count);
-                    self.table[base_row + 1][chunk[1]] =
-                        self.table[base_row + 1][chunk[1]].saturating_add(count);
-                    self.table[base_row + 2][chunk[2]] =
-                        self.table[base_row + 2][chunk[2]].saturating_add(count);
-                    self.table[base_row + 3][chunk[3]] =
-                        self.table[base_row + 3][chunk[3]].saturating_add(count);
-                }
-
-                // Handle remaining rows
-                for (i, &col) in remainder.iter().enumerate() {
-                    let row = hashes.len() - remainder.len() + i;
-                    self.table[row][col] = self.table[row][col].saturating_add(count);
-                }
-            }
-        } else {
-            // Fall back to scalar for insufficient depth
-            self.update_scalar(hashes, count);
-        }
-    }
-
-    /// Estimate frequency using chunked processing (NOT true SIMD)
-    fn estimate_chunked(&self, hashes: &[usize]) -> u64 {
-        if hashes.len() >= 4 {
-            let mut min_count = u64::MAX;
-
-            // Process 4 rows at a time in batches
-            let chunks = hashes.chunks_exact(4);
-            let remainder = chunks.remainder();
-
-            for (chunk_idx, chunk) in chunks.enumerate() {
-                let base_row = chunk_idx * 4;
-
-                // Load 4 values sequentially
-                let val0 = self.table[base_row][chunk[0]];
-                let val1 = self.table[base_row + 1][chunk[1]];
-                let val2 = self.table[base_row + 2][chunk[2]];
-                let val3 = self.table[base_row + 3][chunk[3]];
-
-                // Find minimum of 4 values using regular scalar operations
-                let chunk_min = val0.min(val1).min(val2).min(val3);
-                min_count = min_count.min(chunk_min);
-            }
-
-            // Handle remaining rows
-            for (i, &col) in remainder.iter().enumerate() {
-                let row = hashes.len() - remainder.len() + i;
-                min_count = min_count.min(self.table[row][col]);
-            }
-
-            min_count
-        } else {
-            // Fall back to scalar for small hash sets
-            self.estimate_scalar(hashes)
-        }
     }
 
     /// Merge another Count-Min sketch into this one
@@ -343,7 +216,6 @@ impl CountMinSketch {
             total_count: total_cells,
             max_count,
             min_count,
-            uses_simd: self.use_simd,
             conservative_update: self.conservative_update,
         }
     }
@@ -369,7 +241,6 @@ pub struct CountMinStats {
     pub total_count: u64,
     pub max_count: u64,
     pub min_count: u64,
-    pub uses_simd: bool,
     pub conservative_update: bool,
 }
 
@@ -441,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_countmin_basic() {
-        let mut cm = CountMinSketch::new(1000, 5, false, false);
+        let mut cm = CountMinSketch::new(1000, 5, false);
 
         // Add some items
         cm.increment(&"apple");
@@ -458,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_countmin_conservative() {
-        let mut cm = CountMinSketch::new(100, 5, false, true);
+        let mut cm = CountMinSketch::new(100, 5, true);
 
         // Add items multiple times
         for _ in 0..10 {
@@ -471,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_countmin_error_bounds() {
-        let cm = CountMinSketch::with_error_bounds(0.01, 0.01, false, false);
+        let cm = CountMinSketch::with_error_bounds(0.01, 0.01, false);
 
         // Check that dimensions are reasonable
         assert!(cm.width > 250); // Should be around e/0.01 ≈ 271
@@ -480,8 +351,8 @@ mod tests {
 
     #[test]
     fn test_countmin_merge() {
-        let mut cm1 = CountMinSketch::new(100, 5, false, false);
-        let mut cm2 = CountMinSketch::new(100, 5, false, false);
+        let mut cm1 = CountMinSketch::new(100, 5, false);
+        let mut cm2 = CountMinSketch::new(100, 5, false);
 
         cm1.increment(&"item1");
         cm1.increment(&"item2");
@@ -494,25 +365,6 @@ mod tests {
         assert_eq!(cm1.estimate(&"item1"), 2);
         assert_eq!(cm1.estimate(&"item2"), 1);
         assert_eq!(cm1.estimate(&"item3"), 1);
-    }
-
-    #[test]
-    fn test_countmin_simd() {
-        let mut cm_simd = CountMinSketch::new(100, 8, true, false);
-        let mut cm_standard = CountMinSketch::new(100, 8, false, false);
-
-        let items = ["item1", "item2", "item3", "item4"];
-
-        // Add same items to both sketches
-        for item in &items {
-            cm_simd.increment(item);
-            cm_standard.increment(item);
-        }
-
-        // Both should give same estimates
-        for item in &items {
-            assert_eq!(cm_simd.estimate(item), cm_standard.estimate(item));
-        }
     }
 
     #[test]
@@ -531,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_statistics() {
-        let mut cm = CountMinSketch::new(100, 5, false, false);
+        let mut cm = CountMinSketch::new(100, 5, false);
 
         for i in 0..50 {
             cm.update(&format!("item_{i}"), (i % 10) as u64 + 1);
@@ -546,7 +398,7 @@ mod tests {
 
     #[test]
     fn countmin_overestimates_only_new_hash() {
-        let mut c = CountMinSketch::new(2048, 5, false, false);
+        let mut c = CountMinSketch::new(2048, 5, false);
         for _ in 0..500 {
             c.increment(&"hot");
         }
@@ -557,7 +409,7 @@ mod tests {
     fn countmin_rows_are_independent() {
         // With a wide sketch (4096 columns) and independent per-row hashes,
         // a single item should map to different columns across almost all rows.
-        let c = CountMinSketch::new(4096, 5, false, false);
+        let c = CountMinSketch::new(4096, 5, false);
         let positions = c.hash_item(&"some_item");
         let distinct: std::collections::HashSet<usize> = positions.iter().copied().collect();
         assert!(

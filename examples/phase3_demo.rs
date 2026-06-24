@@ -132,7 +132,7 @@ fn performance_comparison_demo() {
     let cpc_rate = N as f64 / cpc_time.as_secs_f64();
 
     // Bloom Filter Performance
-    let mut bloom = BloomFilter::new(N, 0.01, false);
+    let mut bloom = BloomFilter::new(N, 0.01);
     let start = Instant::now();
     for i in 0..N {
         bloom.add(&i.to_string());
@@ -182,10 +182,8 @@ fn performance_comparison_demo() {
     println!("├─ Union: {:.0} items", union.estimate());
     println!("└─ Intersection: {:.0} items", intersection.estimate());
 
-    println!("\n✨ Phase 3 optimizations include:");
-    println!("  • Cache-aligned data structures");
-    println!("  • SIMD-optimized operations");
-    println!("  • Memory pooling and buffer recycling");
-    println!("  • Batch processing capabilities");
-    println!("  • SIMD acceleration framework (when available)");
+    println!("\n✨ Sketch families demonstrated:");
+    println!("  • HyperLogLog cardinality estimation");
+    println!("  • Theta set operations (union and intersection)");
+    println!("  • Bloom filter membership testing");
 }

@@ -146,7 +146,7 @@ fn theta_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64
 /// in bytes (`num_bits / 8`), read from the filter's public statistics.
 fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String {
     let n = items.len() as u64;
-    let mut filter = BloomFilter::new(n as usize, 0.01, false);
+    let mut filter = BloomFilter::new(n as usize, 0.01);
     let start = Instant::now();
     for item in items {
         filter.add(item);
@@ -172,7 +172,7 @@ fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String 
 /// read from the sketch's public statistics.
 fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String {
     let n = items.len() as u64;
-    let mut sketch = CountMinSketch::new(2048, 5, false, false);
+    let mut sketch = CountMinSketch::new(2048, 5, false);
     let start = Instant::now();
     for item in items {
         sketch.increment(item);

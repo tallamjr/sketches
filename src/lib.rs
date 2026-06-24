@@ -275,13 +275,9 @@ pub struct BloomFilter {
 impl BloomFilter {
     /// Create a new Bloom filter with specified capacity and error rate.
     #[new]
-    fn new(capacity: usize, error_rate: Option<f64>, use_simd: Option<bool>) -> Self {
+    fn new(capacity: usize, error_rate: Option<f64>) -> Self {
         BloomFilter {
-            inner: bloom::BloomFilter::new(
-                capacity,
-                error_rate.unwrap_or(0.01),
-                use_simd.unwrap_or(false),
-            ),
+            inner: bloom::BloomFilter::new(capacity, error_rate.unwrap_or(0.01)),
         }
     }
 
@@ -328,7 +324,6 @@ impl BloomFilter {
             stats.false_positive_probability,
         )
         .unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
 
         dict.into()
     }
@@ -385,17 +380,11 @@ pub struct CountMinSketch {
 impl CountMinSketch {
     /// Create a new Count-Min sketch with specified dimensions.
     #[new]
-    fn new(
-        width: usize,
-        depth: usize,
-        use_simd: Option<bool>,
-        conservative_update: Option<bool>,
-    ) -> Self {
+    fn new(width: usize, depth: usize, conservative_update: Option<bool>) -> Self {
         CountMinSketch {
             inner: countmin::CountMinSketch::new(
                 width,
                 depth,
-                use_simd.unwrap_or(false),
                 conservative_update.unwrap_or(false),
             ),
         }
@@ -403,17 +392,11 @@ impl CountMinSketch {
 
     /// Create a Count-Min sketch with error bounds.
     #[staticmethod]
-    fn with_error_bounds(
-        epsilon: f64,
-        delta: f64,
-        use_simd: Option<bool>,
-        conservative_update: Option<bool>,
-    ) -> Self {
+    fn with_error_bounds(epsilon: f64, delta: f64, conservative_update: Option<bool>) -> Self {
         CountMinSketch {
             inner: countmin::CountMinSketch::with_error_bounds(
                 epsilon,
                 delta,
-                use_simd.unwrap_or(false),
                 conservative_update.unwrap_or(false),
             ),
         }
@@ -479,7 +462,6 @@ impl CountMinSketch {
         dict.set_item("total_count", stats.total_count).unwrap();
         dict.set_item("max_count", stats.max_count).unwrap();
         dict.set_item("min_count", stats.min_count).unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
         dict.set_item("conservative_update", stats.conservative_update)
             .unwrap();
 
@@ -641,24 +623,19 @@ pub struct LinearCounter {
 impl LinearCounter {
     /// Create a new Linear Counter.
     #[new]
-    fn new(num_bits: usize, use_simd: Option<bool>) -> Self {
+    fn new(num_bits: usize) -> Self {
         LinearCounter {
-            inner: linear::LinearCounter::new(num_bits, use_simd.unwrap_or(false)),
+            inner: linear::LinearCounter::new(num_bits),
         }
     }
 
     /// Create a Linear Counter with optimal size for expected cardinality.
     #[staticmethod]
-    fn with_expected_cardinality(
-        expected_cardinality: usize,
-        error_rate: f64,
-        use_simd: Option<bool>,
-    ) -> Self {
+    fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> Self {
         LinearCounter {
             inner: linear::LinearCounter::with_expected_cardinality(
                 expected_cardinality,
                 error_rate,
-                use_simd.unwrap_or(false),
             ),
         }
     }
@@ -716,7 +693,6 @@ impl LinearCounter {
         dict.set_item("should_transition", stats.should_transition)
             .unwrap();
         dict.set_item("memory_usage", stats.memory_usage).unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
 
         dict.into()
     }

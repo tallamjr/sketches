@@ -8,7 +8,7 @@ fn main() {
     println!("1. Count-Min Sketch");
     println!("{}", "-".repeat(20));
 
-    let mut cm = CountMinSketch::new(1000, 5, false, false);
+    let mut cm = CountMinSketch::new(1000, 5, false);
     println!("Created Count-Min sketch (1000 buckets, 5 hash functions)");
 
     // Simulate a data stream
@@ -85,7 +85,7 @@ fn main() {
     println!("\n2. Conservative Update Count-Min Sketch");
     println!("{}", "-".repeat(35));
 
-    let mut cm_conservative = CountMinSketch::new(100, 5, false, true);
+    let mut cm_conservative = CountMinSketch::new(100, 5, true);
     println!("Created conservative Count-Min sketch");
 
     // Add the same data
@@ -100,7 +100,7 @@ fn main() {
     );
     println!("{}", "-".repeat(50));
 
-    for (item, &actual) in &actual_counts {
+    for item in actual_counts.keys() {
         let standard_est = cm.estimate(item);
         let conservative_est = cm_conservative.estimate(item);
         let diff = standard_est.abs_diff(conservative_est);
@@ -136,7 +136,7 @@ fn main() {
     println!("\n4. Count-Min Sketch with Error Bounds");
     println!("{}", "-".repeat(35));
 
-    let cm_bounded = CountMinSketch::with_error_bounds(0.01, 0.01, false, false);
+    let cm_bounded = CountMinSketch::with_error_bounds(0.01, 0.01, false);
     let stats_bounded = cm_bounded.statistics();
 
     println!("Created sketch with 1% error rate and 1% failure probability");
@@ -156,7 +156,7 @@ fn main() {
     println!("\n5. Heavy Hitters Detection");
     println!("{}", "-".repeat(25));
 
-    let mut cm_heavy = CountMinSketch::new(500, 5, false, false);
+    let mut cm_heavy = CountMinSketch::new(500, 5, false);
 
     // Simulate Zipfian distribution (some items much more frequent)
     let zipf_data = [
@@ -193,46 +193,24 @@ fn main() {
 
     println!("\n{}", "=".repeat(50));
 
-    // Performance Comparison
-    println!("\n6. Performance Comparison");
+    // Build throughput
+    println!("\n6. Build Throughput");
     println!("{}", "-".repeat(25));
 
     let n_items = 100000;
     println!("Testing with {n_items} updates");
 
-    // Standard Count-Min Sketch
     let start = std::time::Instant::now();
-    let mut cm_perf = CountMinSketch::new(10000, 5, false, false);
+    let mut cm_perf = CountMinSketch::new(10000, 5, false);
     for i in 0..n_items {
         cm_perf.increment(&format!("item_{}", i % 1000));
     }
-    let standard_time = start.elapsed();
+    let build_time = start.elapsed();
 
-    // SIMD Count-Min Sketch (currently falls back to standard)
-    let start = std::time::Instant::now();
-    let mut cm_simd = CountMinSketch::new(10000, 5, true, false);
-    for i in 0..n_items {
-        cm_simd.increment(&format!("item_{}", i % 1000));
-    }
-    let simd_time = start.elapsed();
+    println!("Build time: {build_time:?}");
 
-    println!("Standard implementation: {standard_time:?}");
-    println!("SIMD implementation: {simd_time:?}");
-    println!(
-        "Speedup: {:.2}x",
-        standard_time.as_nanos() as f64 / simd_time.as_nanos() as f64
-    );
-
-    // Verify both give same results
     let test_item = "item_42";
-    let standard_result = cm_perf.estimate(&test_item);
-    let simd_result = cm_simd.estimate(&test_item);
-    println!(
-        "Results match: {} (standard: {}, SIMD: {})",
-        standard_result == simd_result,
-        standard_result,
-        simd_result
-    );
+    println!("Estimate for {test_item}: {}", cm_perf.estimate(&test_item));
 
     println!("\n{}", "=".repeat(50));
 
@@ -240,8 +218,8 @@ fn main() {
     println!("\n7. Sketch Merging");
     println!("{}", "-".repeat(15));
 
-    let mut cm1 = CountMinSketch::new(1000, 5, false, false);
-    let mut cm2 = CountMinSketch::new(1000, 5, false, false);
+    let mut cm1 = CountMinSketch::new(1000, 5, false);
+    let mut cm2 = CountMinSketch::new(1000, 5, false);
 
     // Add different data to each sketch
     for i in 0..500 {

@@ -25,7 +25,6 @@ pub struct LinearCounter {
     bit_array: Vec<u64>,
     num_bits: usize,
     bits_set: usize,
-    use_simd: bool,
 }
 
 impl LinearCounter {
@@ -33,8 +32,7 @@ impl LinearCounter {
     ///
     /// # Arguments
     /// * `num_bits` - Size of the bit array (larger = more accurate, more memory)
-    /// * `use_simd` - Whether to use SIMD optimizations when available
-    pub fn new(num_bits: usize, use_simd: bool) -> Self {
+    pub fn new(num_bits: usize) -> Self {
         assert!(num_bits > 0, "Number of bits must be positive");
 
         // Round up to nearest multiple of 64 for alignment
@@ -45,7 +43,6 @@ impl LinearCounter {
             bit_array: vec![0u64; num_u64s],
             num_bits: aligned_bits,
             bits_set: 0,
-            use_simd,
         }
     }
 
@@ -54,12 +51,7 @@ impl LinearCounter {
     /// # Arguments
     /// * `expected_cardinality` - Expected number of unique items
     /// * `error_rate` - Desired error rate (e.g., 0.01 for 1% error)
-    /// * `use_simd` - Whether to use SIMD optimizations
-    pub fn with_expected_cardinality(
-        expected_cardinality: usize,
-        error_rate: f64,
-        use_simd: bool,
-    ) -> Self {
+    pub fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> Self {
         assert!(
             error_rate > 0.0 && error_rate < 1.0,
             "Error rate must be between 0 and 1"
@@ -74,7 +66,7 @@ impl LinearCounter {
         let optimal_bits = (expected_cardinality as f64 / (error_rate * error_rate)) as usize;
         let min_bits = (expected_cardinality * 8).max(1024); // Ensure reasonable minimum
 
-        Self::new(optimal_bits.max(min_bits), use_simd)
+        Self::new(optimal_bits.max(min_bits))
     }
 
     /// Update the counter with a new item
@@ -150,51 +142,12 @@ impl LinearCounter {
         // Reset bits_set counter and recalculate
         self.bits_set = 0;
 
-        if self.use_simd && self.bit_array.len() >= 4 {
-            self.merge_chunked(other);
-        } else {
-            self.merge_scalar(other);
-        }
-
-        Ok(())
-    }
-
-    /// Merge using scalar operations
-    fn merge_scalar(&mut self, other: &LinearCounter) {
         for i in 0..self.bit_array.len() {
             self.bit_array[i] |= other.bit_array[i];
             self.bits_set += self.bit_array[i].count_ones() as usize;
         }
-    }
 
-    /// Merge using chunked processing (NOT true SIMD - just batch optimization)
-    fn merge_chunked(&mut self, other: &LinearCounter) {
-        let len = self.bit_array.len();
-
-        // Process 4 u32 values at a time in batches
-        let chunks = self.bit_array.chunks_exact_mut(4);
-        let other_chunks = other.bit_array.chunks_exact(4);
-
-        for (self_chunk, other_chunk) in chunks.zip(other_chunks) {
-            // Perform sequential bitwise OR operations
-            self_chunk[0] |= other_chunk[0];
-            self_chunk[1] |= other_chunk[1];
-            self_chunk[2] |= other_chunk[2];
-            self_chunk[3] |= other_chunk[3];
-
-            // Count bits sequentially using regular count_ones()
-            self.bits_set += self_chunk[0].count_ones() as usize;
-            self.bits_set += self_chunk[1].count_ones() as usize;
-            self.bits_set += self_chunk[2].count_ones() as usize;
-            self.bits_set += self_chunk[3].count_ones() as usize;
-        }
-
-        // Handle remaining elements
-        let remainder_start = (len / 4) * 4;
-        for i in remainder_start..len {
-            self.bit_array[i] |= other.bit_array[i];
-            self.bits_set += self.bit_array[i].count_ones() as usize;
-        }
+        Ok(())
     }
 
     /// Clear the counter
@@ -214,7 +167,6 @@ impl LinearCounter {
             estimated_cardinality: self.estimate(),
             should_transition: self.should_transition_to_hll(),
             memory_usage: self.bit_array.len() * std::mem::size_of::<u64>(),
-            uses_simd: self.use_simd,
         }
     }
 
@@ -240,7 +192,6 @@ pub struct LinearCounterStats {
     pub estimated_cardinality: f64,
     pub should_transition: bool,
     pub memory_usage: usize,
-    pub uses_simd: bool,
 }
 
 /// Hybrid Counter that automatically transitions from Linear Counter to HyperLogLog
@@ -263,7 +214,7 @@ impl HybridCounter {
     /// * `transition_threshold` - Cardinality threshold for LC->HLL transition
     pub fn new(linear_bits: usize, lg_k: u8, transition_threshold: usize) -> Self {
         HybridCounter {
-            linear: Some(LinearCounter::new(linear_bits, false)),
+            linear: Some(LinearCounter::new(linear_bits)),
             hll: None,
             transition_threshold,
             lg_k,
@@ -383,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_basic() {
-        let mut lc = LinearCounter::new(1024, false);
+        let mut lc = LinearCounter::new(1024);
 
         // Add some unique items
         for i in 0..100 {
@@ -400,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_accuracy() {
-        let mut lc = LinearCounter::with_expected_cardinality(500, 0.05, false);
+        let mut lc = LinearCounter::with_expected_cardinality(500, 0.05);
 
         // Add known number of unique items
         for i in 0..300 {
@@ -421,8 +372,8 @@ mod tests {
 
     #[test]
     fn test_linear_counter_merge() {
-        let mut lc1 = LinearCounter::new(2048, false);
-        let mut lc2 = LinearCounter::new(2048, false);
+        let mut lc1 = LinearCounter::new(2048);
+        let mut lc2 = LinearCounter::new(2048);
 
         // Add different items to each counter
         for i in 0..100 {
@@ -443,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_transition() {
-        let mut lc = LinearCounter::new(512, false);
+        let mut lc = LinearCounter::new(512);
 
         // Fill it up to trigger transition recommendation
         for i in 0..400 {
@@ -491,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_edge_cases() {
-        let mut lc = LinearCounter::new(1024, false);
+        let mut lc = LinearCounter::new(1024);
 
         // Empty counter
         assert_eq!(lc.estimate(), 0.0);
@@ -507,23 +458,5 @@ mod tests {
             (0.8..=1.2).contains(&estimate),
             "Estimate {estimate} should be close to 1"
         );
-    }
-
-    #[test]
-    fn test_linear_counter_simd() {
-        let mut lc_simd = LinearCounter::new(1024, true);
-        let mut lc_standard = LinearCounter::new(1024, false);
-
-        let test_items = (0..100).collect::<Vec<_>>();
-
-        // Add same items to both counters
-        for item in &test_items {
-            lc_simd.update(item);
-            lc_standard.update(item);
-        }
-
-        // Should give same results
-        assert_eq!(lc_simd.bits_set, lc_standard.bits_set);
-        assert!((lc_simd.estimate() - lc_standard.estimate()).abs() < 0.01);
     }
 }
