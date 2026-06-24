@@ -20,15 +20,20 @@
 //! - Dunning, T. "Computing Extremely Accurate Quantiles Using t-Digests." 2019.
 //!   https://arxiv.org/abs/1902.04023
 
+use crate::serialization::{FAMILY_TDIGEST_LOCAL, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use tdigest::TDigest as CoreTDigest;
+
+/// Serial format version for the T-Digest postcard payload.
+const TDIGEST_SERIAL_VERSION: u8 = 1;
 
 /// T-Digest for streaming quantile estimation
 ///
 /// The T-Digest is a probabilistic data structure for estimating quantiles
 /// from a stream of data points. It provides excellent accuracy for extreme
 /// quantiles (like p95, p99) while maintaining compact memory usage.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TDigest {
     /// The underlying t-digest implementation
     inner: CoreTDigest,
@@ -345,6 +350,25 @@ impl TDigest {
 impl Default for TDigest {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Serializable for TDigest {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("TDigest decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_TDIGEST_LOCAL
+    }
+
+    fn serial_version(&self) -> u8 {
+        TDIGEST_SERIAL_VERSION
     }
 }
 
@@ -697,6 +721,40 @@ mod tests {
 
         // Edge case: lower >= upper
         assert_eq!(digest.trimmed_mean(0.9, 0.1), None);
+    }
+
+    #[test]
+    fn test_tdigest_serializable_roundtrip() {
+        let mut digest = TDigest::with_compression(200);
+        for i in 1..=100_000 {
+            digest.add(i as f64);
+        }
+        let count = digest.count();
+        let min = digest.min();
+        let max = digest.max();
+        let median = digest.median().unwrap();
+        let p99 = digest.quantile(0.99).unwrap();
+
+        let bytes = Serializable::to_bytes(&digest);
+        let restored = <TDigest as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.count(), count);
+        assert_eq!(restored.min(), min);
+        assert_eq!(restored.max(), max);
+        assert!(
+            (restored.median().unwrap() - median).abs() < 1e-6,
+            "median must round-trip: {} vs {}",
+            median,
+            restored.median().unwrap()
+        );
+        assert!(
+            (restored.quantile(0.99).unwrap() - p99).abs() < 1e-6,
+            "p99 must round-trip: {} vs {}",
+            p99,
+            restored.quantile(0.99).unwrap()
+        );
+        assert_eq!(digest.family_id(), FAMILY_TDIGEST_LOCAL);
+        assert_eq!(digest.serial_version(), TDIGEST_SERIAL_VERSION);
     }
 
     #[test]
