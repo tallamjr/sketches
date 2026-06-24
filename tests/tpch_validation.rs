@@ -47,22 +47,7 @@ fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     let est = sk.estimate();
     let rel_err =
         ((est - true_count).abs() / true_count).max((true_count - est).abs() / true_count);
-    // KNOWN ISSUE: Our simplified CPC implementation has fundamental accuracy problems
-    // Real TPC-H data shows 173% error, indicating the algorithm needs complete rewrite
-    // For now, just verify the sketch doesn't crash and produces some estimate
-    assert!(est > 0.0, "CPC should produce a positive estimate");
-    assert!(est.is_finite(), "CPC estimate should be finite");
-
-    // Log the current accuracy issue for tracking
-    eprintln!(
-        "WARNING: CPC accuracy issue - est: {}, true: {}, error: {:.1}%",
-        est,
-        true_count,
-        rel_err * 100.0
-    );
-
-    // TODO: Implement proper CPC algorithm to achieve <5% error
-    // For reference: Apache DataSketches CPC achieves ~1-2% error on this dataset
+    assert!(rel_err < 0.05, "CPC err >5%: est {est}, true {true_count}");
     // Log memory usage: naive vs probabilistic sketch
     let naive_cap = truth.capacity();
     let naive_mem = naive_cap * std::mem::size_of::<String>();
@@ -134,7 +119,7 @@ fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
     let s1: HashSet<_> = p1.iter().cloned().collect();
     let s2: HashSet<_> = p2.iter().cloned().collect();
     let true_u = s1.union(&s2).count() as f64;
-    let true_i = s1.intersection(&s2).count() as f64;
+    let _true_i = s1.intersection(&s2).count() as f64;
 
     let mut sk1 = ThetaSketch::new(1024);
     let mut sk2 = ThetaSketch::new(1024);

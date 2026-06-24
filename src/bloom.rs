@@ -22,22 +22,14 @@
 //! - Bloom, B. H. "Space/Time Trade-offs in Hash Coding with Allowable Errors."
 //!   Communications of the ACM, 1970.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
 
-#[cfg(feature = "optimized")]
-use crate::fast_hash;
-#[cfg(feature = "optimized")]
-use crate::simd_ops::bloom;
-#[cfg(feature = "optimized")]
-use rayon::prelude::*;
-
-/// Standard Bloom Filter implementation with optional SIMD optimizations
+/// Standard Bloom Filter implementation
 pub struct BloomFilter {
     bit_array: Vec<u64>,
     num_bits: usize,
     num_hash_functions: usize,
-    use_simd: bool,
 }
 
 impl BloomFilter {
@@ -46,8 +38,7 @@ impl BloomFilter {
     /// # Arguments
     /// * `capacity` - Expected number of elements
     /// * `error_rate` - Desired false positive rate (e.g., 0.01 for 1%)
-    /// * `use_simd` - Whether to use SIMD optimizations (when available)
-    pub fn new(capacity: usize, error_rate: f64, use_simd: bool) -> Self {
+    pub fn new(capacity: usize, error_rate: f64) -> Self {
         assert!(capacity > 0, "Capacity must be greater than 0");
         assert!(
             error_rate > 0.0 && error_rate < 1.0,
@@ -58,14 +49,12 @@ impl BloomFilter {
         let num_bits = Self::calculate_num_bits(capacity, error_rate);
         let num_hash_functions = Self::calculate_num_hash_functions(num_bits, capacity);
 
-        // Use u64 chunks for better SIMD alignment
         let num_u64s = num_bits.div_ceil(64);
 
         BloomFilter {
             bit_array: vec![0u64; num_u64s],
             num_bits,
             num_hash_functions,
-            use_simd,
         }
     }
 
@@ -82,63 +71,30 @@ impl BloomFilter {
     }
 
     /// Add an element to the filter
-    pub fn add<T: Hash>(&mut self, item: &T) {
+    pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.num_hash_functions >= 4 {
-            self.set_bits_simd(&hashes);
-        } else {
-            self.set_bits_scalar(&hashes);
-        }
+        self.set_bits_scalar(&hashes);
     }
 
     /// Check if an element might be in the filter
-    pub fn contains<T: Hash>(&self, item: &T) -> bool {
+    pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
         let hashes = self.hash_item(item);
-
-        if self.use_simd && self.num_hash_functions >= 4 {
-            self.check_bits_simd(&hashes)
-        } else {
-            self.check_bits_scalar(&hashes)
-        }
+        self.check_bits_scalar(&hashes)
     }
 
-    /// Generate hash values for an item
-    fn hash_item<T: Hash>(&self, item: &T) -> Vec<usize> {
-        #[cfg(feature = "optimized")]
-        {
-            let hash1 = fast_hash::fast_hash(item);
-            let hash2 = fast_hash::fast_hash_with_seed(&hash1, 0x517cc1b727220a95);
+    /// Generate hash values for an item using double hashing with xxh3
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+        let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
 
-            // Use double hashing to generate multiple hash functions
-            let mut hashes = Vec::with_capacity(self.num_hash_functions);
-            for i in 0..self.num_hash_functions {
-                let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-                hashes.push((hash as usize) % self.num_bits);
-            }
-
-            hashes
+        // Use double hashing to generate multiple hash functions
+        let mut hashes = Vec::with_capacity(self.num_hash_functions);
+        for i in 0..self.num_hash_functions {
+            let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
+            hashes.push((hash as usize) % self.num_bits);
         }
 
-        #[cfg(not(feature = "optimized"))]
-        {
-            let mut hasher1 = DefaultHasher::new();
-            item.hash(&mut hasher1);
-            let hash1 = hasher1.finish();
-
-            let mut hasher2 = DefaultHasher::new();
-            hash1.hash(&mut hasher2);
-            let hash2 = hasher2.finish();
-
-            // Use double hashing to generate multiple hash functions
-            let mut hashes = Vec::with_capacity(self.num_hash_functions);
-            for i in 0..self.num_hash_functions {
-                let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-                hashes.push((hash as usize) % self.num_bits);
-            }
-
-            hashes
-        }
+        hashes
     }
 
     /// Set bits using scalar operations
@@ -170,105 +126,22 @@ impl BloomFilter {
         true
     }
 
-    /// Set bits using SIMD operations when available
-    fn set_bits_simd(&mut self, positions: &[usize]) {
-        #[cfg(feature = "optimized")]
-        {
-            bloom::set_bits(&mut self.bit_array, positions);
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        self.set_bits_scalar(positions);
-    }
-
-    /// Check bits using SIMD operations when available
-    fn check_bits_simd(&self, positions: &[usize]) -> bool {
-        #[cfg(feature = "optimized")]
-        {
-            let results = bloom::check_bits(&self.bit_array, positions);
-            results.iter().all(|&x| x)
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        self.check_bits_scalar(positions)
-    }
-
-    /// Batch add multiple elements for better performance
-    #[cfg(feature = "optimized")]
-    pub fn add_batch<T: Hash + Sync>(&mut self, items: &[T]) {
-        // Use parallel processing for large batches
-        let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
-            items.par_iter().map(|item| self.hash_item(item)).collect()
-        } else {
-            items.iter().map(|item| self.hash_item(item)).collect()
-        };
-
-        // Flatten all positions for SIMD processing
-        let flat_positions: Vec<usize> = all_positions.into_iter().flatten().collect();
-
-        // Use SIMD operations for setting bits
-        if self.use_simd && flat_positions.len() >= 16 {
-            bloom::set_bits(&mut self.bit_array, &flat_positions);
-        } else {
-            self.set_bits_scalar(&flat_positions);
-        }
-    }
-
-    /// Batch add fallback for non-optimized builds
-    #[cfg(not(feature = "optimized"))]
-    pub fn add_batch<T: Hash>(&mut self, items: &[T]) {
+    /// Batch add multiple elements
+    pub fn add_batch<T: Hashable>(&mut self, items: &[T]) {
         for item in items {
             self.add(item);
         }
     }
 
-    /// Batch check multiple elements for better performance
-    #[cfg(feature = "optimized")]
-    pub fn contains_batch<T: Hash + Sync>(&self, items: &[T]) -> Vec<bool> {
-        // Use parallel processing for large batches
-        let all_positions: Vec<Vec<usize>> = if items.len() > 1000 {
-            items.par_iter().map(|item| self.hash_item(item)).collect()
-        } else {
-            items.iter().map(|item| self.hash_item(item)).collect()
-        };
-
-        // Check each item's positions
-        all_positions
-            .into_iter()
-            .map(|positions| {
-                if self.use_simd && positions.len() >= 4 {
-                    let results = bloom::check_bits(&self.bit_array, &positions);
-                    results.iter().all(|&x| x)
-                } else {
-                    self.check_bits_scalar(&positions)
-                }
-            })
-            .collect()
-    }
-
-    /// Batch check fallback for non-optimized builds
-    #[cfg(not(feature = "optimized"))]
-    pub fn contains_batch<T: Hash>(&self, items: &[T]) -> Vec<bool> {
+    /// Batch check multiple elements
+    pub fn contains_batch<T: Hashable>(&self, items: &[T]) -> Vec<bool> {
         items.iter().map(|item| self.contains(item)).collect()
     }
 
     /// Clear the filter
     pub fn clear(&mut self) {
-        #[cfg(feature = "optimized")]
-        {
-            // Use parallel clearing for large filters
-            if self.bit_array.len() > 1000 {
-                self.bit_array.par_iter_mut().for_each(|chunk| *chunk = 0);
-            } else {
-                self.bit_array.fill(0);
-            }
-        }
-
-        #[cfg(not(feature = "optimized"))]
-        {
-            for chunk in &mut self.bit_array {
-                *chunk = 0;
-            }
+        for chunk in &mut self.bit_array {
+            *chunk = 0;
         }
     }
 
@@ -300,7 +173,6 @@ impl BloomFilter {
             bits_set,
             fill_ratio: bits_set as f64 / self.num_bits as f64,
             false_positive_probability: self.false_positive_probability(),
-            uses_simd: self.use_simd,
         }
     }
 }
@@ -313,7 +185,6 @@ pub struct BloomFilterStats {
     pub bits_set: usize,
     pub fill_ratio: f64,
     pub false_positive_probability: f64,
-    pub uses_simd: bool,
 }
 
 /// Counting Bloom Filter - allows deletions
@@ -339,7 +210,7 @@ impl CountingBloomFilter {
     }
 
     /// Add an element to the filter
-    pub fn add<T: Hash>(&mut self, item: &T) {
+    pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hashes = self.hash_item(item);
 
         for &pos in &hashes {
@@ -350,7 +221,7 @@ impl CountingBloomFilter {
     }
 
     /// Remove an element from the filter
-    pub fn remove<T: Hash>(&mut self, item: &T) -> bool {
+    pub fn remove<T: Hashable + ?Sized>(&mut self, item: &T) -> bool {
         let hashes = self.hash_item(item);
 
         // Check if all positions have non-zero counts
@@ -371,7 +242,7 @@ impl CountingBloomFilter {
     }
 
     /// Check if an element might be in the filter
-    pub fn contains<T: Hash>(&self, item: &T) -> bool {
+    pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
         let hashes = self.hash_item(item);
 
         for &pos in &hashes {
@@ -382,15 +253,10 @@ impl CountingBloomFilter {
         true
     }
 
-    /// Generate hash values for an item
-    fn hash_item<T: Hash>(&self, item: &T) -> Vec<usize> {
-        let mut hasher1 = DefaultHasher::new();
-        item.hash(&mut hasher1);
-        let hash1 = hasher1.finish();
-
-        let mut hasher2 = DefaultHasher::new();
-        hash1.hash(&mut hasher2);
-        let hash2 = hasher2.finish();
+    /// Generate hash values for an item using double hashing with xxh3
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+        let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
 
         let mut hashes = Vec::with_capacity(self.num_hash_functions);
         for i in 0..self.num_hash_functions {
@@ -408,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_bloom_filter_basic() {
-        let mut filter = BloomFilter::new(1000, 0.01, false);
+        let mut filter = BloomFilter::new(1000, 0.01);
 
         // Add some items
         filter.add(&"hello");
@@ -425,27 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn test_bloom_filter_simd() {
-        let mut filter_simd = BloomFilter::new(1000, 0.01, true);
-        let mut filter_standard = BloomFilter::new(1000, 0.01, false);
-
-        let test_items = ["item1", "item2", "item3", "item4", "item5"];
-
-        // Add same items to both filters
-        for item in &test_items {
-            filter_simd.add(item);
-            filter_standard.add(item);
-        }
-
-        // Both should have same results
-        for item in &test_items {
-            assert_eq!(filter_simd.contains(item), filter_standard.contains(item));
-        }
-    }
-
-    #[test]
     fn test_false_positive_rate() {
-        let mut filter = BloomFilter::new(1000, 0.01, false);
+        let mut filter = BloomFilter::new(1000, 0.01);
 
         // Add 1000 items
         for i in 0..1000 {
@@ -495,12 +342,30 @@ mod tests {
 
     #[test]
     fn test_filter_parameters() {
-        let filter = BloomFilter::new(10000, 0.001, false);
+        let filter = BloomFilter::new(10000, 0.001);
         let stats = filter.statistics();
 
         assert!(stats.num_bits > 0);
         assert!(stats.num_hash_functions > 0);
         assert_eq!(stats.bits_set, 0); // Empty filter
         assert_eq!(stats.fill_ratio, 0.0);
+    }
+
+    #[test]
+    fn bloom_fpr_reasonable_new_hash() {
+        let mut b = BloomFilter::new(10_000, 0.01);
+        for i in 0u64..10_000 {
+            b.add(&i);
+        }
+        for i in 0u64..10_000 {
+            assert!(b.contains(&i));
+        }
+        let mut fp = 0;
+        for i in 10_000u64..20_000 {
+            if b.contains(&i) {
+                fp += 1;
+            }
+        }
+        assert!(fp as f64 / 10_000.0 < 0.03, "fpr too high");
     }
 }

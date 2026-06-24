@@ -13,19 +13,25 @@
 //! - Whang, Vander-Zanden, Taylor. "A Linear-Time Probabilistic Counting Algorithm
 //!   for Database Applications." ACM TODS, 1990.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
+use crate::serialization::{FAMILY_HYBRID, FAMILY_LINEAR, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
+
+/// Serial format version for LinearCounter and HybridCounter postcard payloads.
+const LINEAR_SERIAL_VERSION: u8 = 1;
+const HYBRID_SERIAL_VERSION: u8 = 1;
 
 /// Linear Counter for small cardinality estimation
 ///
 /// Linear Counter is more accurate than HyperLogLog for small cardinalities (< 1000)
 /// and serves as an efficient preprocessing step before transitioning to HLL.
 /// It's based on the coupon collector problem and uses a simple bit array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinearCounter {
     bit_array: Vec<u64>,
     num_bits: usize,
     bits_set: usize,
-    use_simd: bool,
 }
 
 impl LinearCounter {
@@ -33,8 +39,7 @@ impl LinearCounter {
     ///
     /// # Arguments
     /// * `num_bits` - Size of the bit array (larger = more accurate, more memory)
-    /// * `use_simd` - Whether to use SIMD optimizations when available
-    pub fn new(num_bits: usize, use_simd: bool) -> Self {
+    pub fn new(num_bits: usize) -> Self {
         assert!(num_bits > 0, "Number of bits must be positive");
 
         // Round up to nearest multiple of 64 for alignment
@@ -45,7 +50,6 @@ impl LinearCounter {
             bit_array: vec![0u64; num_u64s],
             num_bits: aligned_bits,
             bits_set: 0,
-            use_simd,
         }
     }
 
@@ -54,12 +58,7 @@ impl LinearCounter {
     /// # Arguments
     /// * `expected_cardinality` - Expected number of unique items
     /// * `error_rate` - Desired error rate (e.g., 0.01 for 1% error)
-    /// * `use_simd` - Whether to use SIMD optimizations
-    pub fn with_expected_cardinality(
-        expected_cardinality: usize,
-        error_rate: f64,
-        use_simd: bool,
-    ) -> Self {
+    pub fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> Self {
         assert!(
             error_rate > 0.0 && error_rate < 1.0,
             "Error rate must be between 0 and 1"
@@ -74,11 +73,11 @@ impl LinearCounter {
         let optimal_bits = (expected_cardinality as f64 / (error_rate * error_rate)) as usize;
         let min_bits = (expected_cardinality * 8).max(1024); // Ensure reasonable minimum
 
-        Self::new(optimal_bits.max(min_bits), use_simd)
+        Self::new(optimal_bits.max(min_bits))
     }
 
     /// Update the counter with a new item
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         let hash = self.hash_item(item);
         let bit_index = (hash as usize) % self.num_bits;
 
@@ -94,10 +93,8 @@ impl LinearCounter {
     }
 
     /// Hash an item to get a bit position
-    fn hash_item<T: Hash>(&self, item: &T) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        hasher.finish()
+    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
+        hash64_of(&Xxh3Hasher, item, DEFAULT_SEED)
     }
 
     /// Estimate the cardinality
@@ -150,51 +147,12 @@ impl LinearCounter {
         // Reset bits_set counter and recalculate
         self.bits_set = 0;
 
-        if self.use_simd && self.bit_array.len() >= 4 {
-            self.merge_chunked(other);
-        } else {
-            self.merge_scalar(other);
-        }
-
-        Ok(())
-    }
-
-    /// Merge using scalar operations
-    fn merge_scalar(&mut self, other: &LinearCounter) {
         for i in 0..self.bit_array.len() {
             self.bit_array[i] |= other.bit_array[i];
             self.bits_set += self.bit_array[i].count_ones() as usize;
         }
-    }
 
-    /// Merge using chunked processing (NOT true SIMD - just batch optimization)
-    fn merge_chunked(&mut self, other: &LinearCounter) {
-        let len = self.bit_array.len();
-
-        // Process 4 u32 values at a time in batches
-        let chunks = self.bit_array.chunks_exact_mut(4);
-        let other_chunks = other.bit_array.chunks_exact(4);
-
-        for (self_chunk, other_chunk) in chunks.zip(other_chunks) {
-            // Perform sequential bitwise OR operations
-            self_chunk[0] |= other_chunk[0];
-            self_chunk[1] |= other_chunk[1];
-            self_chunk[2] |= other_chunk[2];
-            self_chunk[3] |= other_chunk[3];
-
-            // Count bits sequentially using regular count_ones()
-            self.bits_set += self_chunk[0].count_ones() as usize;
-            self.bits_set += self_chunk[1].count_ones() as usize;
-            self.bits_set += self_chunk[2].count_ones() as usize;
-            self.bits_set += self_chunk[3].count_ones() as usize;
-        }
-
-        // Handle remaining elements
-        let remainder_start = (len / 4) * 4;
-        for i in remainder_start..len {
-            self.bit_array[i] |= other.bit_array[i];
-            self.bits_set += self.bit_array[i].count_ones() as usize;
-        }
+        Ok(())
     }
 
     /// Clear the counter
@@ -214,7 +172,6 @@ impl LinearCounter {
             estimated_cardinality: self.estimate(),
             should_transition: self.should_transition_to_hll(),
             memory_usage: self.bit_array.len() * std::mem::size_of::<u64>(),
-            uses_simd: self.use_simd,
         }
     }
 
@@ -231,6 +188,26 @@ impl LinearCounter {
     }
 }
 
+impl Serializable for LinearCounter {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("LinearCounter decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_LINEAR
+    }
+
+    fn serial_version(&self) -> u8 {
+        LINEAR_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Linear Counter
 #[derive(Debug, Clone)]
 pub struct LinearCounterStats {
@@ -240,7 +217,6 @@ pub struct LinearCounterStats {
     pub estimated_cardinality: f64,
     pub should_transition: bool,
     pub memory_usage: usize,
-    pub uses_simd: bool,
 }
 
 /// Hybrid Counter that automatically transitions from Linear Counter to HyperLogLog
@@ -263,7 +239,7 @@ impl HybridCounter {
     /// * `transition_threshold` - Cardinality threshold for LC->HLL transition
     pub fn new(linear_bits: usize, lg_k: u8, transition_threshold: usize) -> Self {
         HybridCounter {
-            linear: Some(LinearCounter::new(linear_bits, false)),
+            linear: Some(LinearCounter::new(linear_bits)),
             hll: None,
             transition_threshold,
             lg_k,
@@ -287,7 +263,7 @@ impl HybridCounter {
     }
 
     /// Update the counter with a new item
-    pub fn update<T: Hash>(&mut self, item: &T) {
+    pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
         if let Some(ref mut linear) = self.linear {
             linear.update(item);
 
@@ -366,6 +342,65 @@ impl HybridCounter {
     }
 }
 
+/// Serialisable snapshot of a HybridCounter.
+///
+/// HybridCounter holds an optional `HllSketch`, which is serialised through its
+/// own `Serializable` codec rather than serde. The active component (Linear or
+/// HLL) is captured as a byte payload alongside the scalar configuration so the
+/// counter can be reconstructed exactly in its current mode.
+#[derive(Serialize, Deserialize)]
+struct HybridSnapshot {
+    linear_bytes: Option<Vec<u8>>,
+    hll_bytes: Option<Vec<u8>>,
+    transition_threshold: usize,
+    lg_k: u8,
+}
+
+impl Serializable for HybridCounter {
+    fn to_bytes(&self) -> Vec<u8> {
+        let linear_bytes = self.linear.as_ref().map(Serializable::to_bytes);
+        let hll_bytes = self
+            .hll
+            .as_ref()
+            .map(<crate::hll::HllSketch as Serializable>::to_bytes);
+        let snapshot = HybridSnapshot {
+            linear_bytes,
+            hll_bytes,
+            transition_threshold: self.transition_threshold,
+            lg_k: self.lg_k,
+        };
+        postcard::to_allocvec(&snapshot).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        let snapshot: HybridSnapshot = postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("HybridCounter decode failed: {e}"))
+        })?;
+        let linear = match snapshot.linear_bytes {
+            Some(ref b) => Some(LinearCounter::from_bytes(b)?),
+            None => None,
+        };
+        let hll = match snapshot.hll_bytes {
+            Some(ref b) => Some(<crate::hll::HllSketch as Serializable>::from_bytes(b)?),
+            None => None,
+        };
+        Ok(HybridCounter {
+            linear,
+            hll,
+            transition_threshold: snapshot.transition_threshold,
+            lg_k: snapshot.lg_k,
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_HYBRID
+    }
+
+    fn serial_version(&self) -> u8 {
+        HYBRID_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Hybrid Counter
 #[derive(Debug, Clone)]
 pub struct HybridCounterStats {
@@ -383,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_basic() {
-        let mut lc = LinearCounter::new(1024, false);
+        let mut lc = LinearCounter::new(1024);
 
         // Add some unique items
         for i in 0..100 {
@@ -400,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_accuracy() {
-        let mut lc = LinearCounter::with_expected_cardinality(500, 0.05, false);
+        let mut lc = LinearCounter::with_expected_cardinality(500, 0.05);
 
         // Add known number of unique items
         for i in 0..300 {
@@ -421,8 +456,8 @@ mod tests {
 
     #[test]
     fn test_linear_counter_merge() {
-        let mut lc1 = LinearCounter::new(2048, false);
-        let mut lc2 = LinearCounter::new(2048, false);
+        let mut lc1 = LinearCounter::new(2048);
+        let mut lc2 = LinearCounter::new(2048);
 
         // Add different items to each counter
         for i in 0..100 {
@@ -443,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_linear_counter_transition() {
-        let mut lc = LinearCounter::new(512, false);
+        let mut lc = LinearCounter::new(512);
 
         // Fill it up to trigger transition recommendation
         for i in 0..400 {
@@ -490,8 +525,77 @@ mod tests {
     }
 
     #[test]
+    fn test_linear_counter_serializable_roundtrip() {
+        let mut lc = LinearCounter::new(4096);
+        for i in 0..500 {
+            lc.update(&format!("item_{i}"));
+        }
+        let estimate = lc.estimate();
+        let bits_set = lc.bits_set;
+
+        let bytes = Serializable::to_bytes(&lc);
+        let restored = LinearCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(
+            restored.bits_set, bits_set,
+            "bits_set must round-trip exactly"
+        );
+        assert!(
+            (restored.estimate() - estimate).abs() < 1e-6,
+            "estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
+        assert_eq!(lc.family_id(), FAMILY_LINEAR);
+        assert_eq!(lc.serial_version(), LINEAR_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn test_hybrid_counter_roundtrip_linear_mode() {
+        let mut hybrid = HybridCounter::new(8192, 12, 100_000);
+        for i in 0..200 {
+            hybrid.update(&i);
+        }
+        assert_eq!(hybrid.mode(), "Linear Counter");
+        let estimate = hybrid.estimate();
+
+        let bytes = Serializable::to_bytes(&hybrid);
+        let restored = HybridCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.mode(), "Linear Counter");
+        assert!(
+            (restored.estimate() - estimate).abs() < 1e-6,
+            "linear-mode estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
+        assert_eq!(hybrid.family_id(), FAMILY_HYBRID);
+    }
+
+    #[test]
+    fn test_hybrid_counter_roundtrip_hll_mode() {
+        let mut hybrid = HybridCounter::new(2048, 12, 200);
+        for i in 0..5000 {
+            hybrid.update(&i);
+        }
+        assert_eq!(hybrid.mode(), "HyperLogLog");
+        let estimate = hybrid.estimate();
+
+        let bytes = Serializable::to_bytes(&hybrid);
+        let restored = HybridCounter::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.mode(), "HyperLogLog");
+        assert!(
+            (restored.estimate() - estimate).abs() < 1.0,
+            "HLL-mode estimate must round-trip: {} vs {}",
+            estimate,
+            restored.estimate()
+        );
+    }
+
+    #[test]
     fn test_linear_counter_edge_cases() {
-        let mut lc = LinearCounter::new(1024, false);
+        let mut lc = LinearCounter::new(1024);
 
         // Empty counter
         assert_eq!(lc.estimate(), 0.0);
@@ -507,23 +611,5 @@ mod tests {
             (0.8..=1.2).contains(&estimate),
             "Estimate {estimate} should be close to 1"
         );
-    }
-
-    #[test]
-    fn test_linear_counter_simd() {
-        let mut lc_simd = LinearCounter::new(1024, true);
-        let mut lc_standard = LinearCounter::new(1024, false);
-
-        let test_items = (0..100).collect::<Vec<_>>();
-
-        // Add same items to both counters
-        for item in &test_items {
-            lc_simd.update(item);
-            lc_standard.update(item);
-        }
-
-        // Should give same results
-        assert_eq!(lc_simd.bits_set, lc_standard.bits_set);
-        assert!((lc_simd.estimate() - lc_standard.estimate()).abs() < 0.01);
     }
 }

@@ -16,14 +16,6 @@
 //!
 //! Rust library (`rlib`) with optional Python bindings via PyO3 (`cdylib`).
 
-// Performance optimization setup
-#[cfg(feature = "optimized")]
-use jemallocator::Jemalloc;
-
-#[cfg(feature = "optimized")]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 #[cfg(feature = "extension-module")]
 use pyo3::PyObject;
 #[cfg(feature = "extension-module")]
@@ -35,6 +27,7 @@ pub mod aod;
 pub mod bloom;
 pub mod countmin;
 pub mod cpc;
+mod cpc_tables;
 pub mod frequent;
 pub mod hll;
 pub mod linear;
@@ -46,15 +39,9 @@ pub mod theta;
 pub mod tuple;
 pub mod varopt;
 
+pub mod codec;
+pub mod hash;
 pub mod serialization;
-
-// Performance optimization modules
-#[cfg(feature = "optimized")]
-pub mod compact_memory;
-#[cfg(feature = "optimized")]
-pub mod fast_hash;
-#[cfg(feature = "optimized")]
-pub mod simd_ops;
 
 /// Python binding for CPC sketch.
 #[cfg(feature = "extension-module")]
@@ -118,43 +105,6 @@ impl HllSketch {
     /// Update the sketch with a string item.
     pub fn update(&mut self, item: &str) -> PyResult<()> {
         self.inner.update(&item);
-        Ok(())
-    }
-
-    /// Batch update with multiple items (optimized for Python).
-    #[cfg(feature = "optimized")]
-    pub fn update_batch(&mut self, py: Python, items: Vec<&str>) -> PyResult<()> {
-        // Release GIL for CPU-intensive work
-        py.allow_threads(|| {
-            self.inner.update_batch(&items);
-        })?;
-        Ok(())
-    }
-
-    /// Update from numpy array or bytes buffer (zero-copy when possible).
-    #[cfg(feature = "optimized")]
-    pub fn update_from_buffer(&mut self, py: Python, buffer: &PyAny) -> PyResult<()> {
-        // Try to get buffer interface for zero-copy access
-        if let Ok(buffer_info) = buffer.extract::<pyo3::buffer::PyBuffer<u8>>() {
-            let data = unsafe { buffer_info.as_slice(py)? };
-
-            // Release GIL for processing
-            py.allow_threads(|| {
-                // Process data in chunks
-                for chunk in data.chunks(8) {
-                    self.inner.update(&chunk);
-                }
-            })?;
-        } else {
-            // Fallback to string conversion
-            let items: Vec<String> = buffer.extract()?;
-            let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
-
-            py.allow_threads(|| {
-                self.inner.update_batch(&item_refs);
-            })?;
-        }
-
         Ok(())
     }
 
@@ -325,13 +275,9 @@ pub struct BloomFilter {
 impl BloomFilter {
     /// Create a new Bloom filter with specified capacity and error rate.
     #[new]
-    fn new(capacity: usize, error_rate: Option<f64>, use_simd: Option<bool>) -> Self {
+    fn new(capacity: usize, error_rate: Option<f64>) -> Self {
         BloomFilter {
-            inner: bloom::BloomFilter::new(
-                capacity,
-                error_rate.unwrap_or(0.01),
-                use_simd.unwrap_or(false),
-            ),
+            inner: bloom::BloomFilter::new(capacity, error_rate.unwrap_or(0.01)),
         }
     }
 
@@ -378,7 +324,6 @@ impl BloomFilter {
             stats.false_positive_probability,
         )
         .unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
 
         dict.into()
     }
@@ -435,17 +380,11 @@ pub struct CountMinSketch {
 impl CountMinSketch {
     /// Create a new Count-Min sketch with specified dimensions.
     #[new]
-    fn new(
-        width: usize,
-        depth: usize,
-        use_simd: Option<bool>,
-        conservative_update: Option<bool>,
-    ) -> Self {
+    fn new(width: usize, depth: usize, conservative_update: Option<bool>) -> Self {
         CountMinSketch {
             inner: countmin::CountMinSketch::new(
                 width,
                 depth,
-                use_simd.unwrap_or(false),
                 conservative_update.unwrap_or(false),
             ),
         }
@@ -453,17 +392,11 @@ impl CountMinSketch {
 
     /// Create a Count-Min sketch with error bounds.
     #[staticmethod]
-    fn with_error_bounds(
-        epsilon: f64,
-        delta: f64,
-        use_simd: Option<bool>,
-        conservative_update: Option<bool>,
-    ) -> Self {
+    fn with_error_bounds(epsilon: f64, delta: f64, conservative_update: Option<bool>) -> Self {
         CountMinSketch {
             inner: countmin::CountMinSketch::with_error_bounds(
                 epsilon,
                 delta,
-                use_simd.unwrap_or(false),
                 conservative_update.unwrap_or(false),
             ),
         }
@@ -529,7 +462,6 @@ impl CountMinSketch {
         dict.set_item("total_count", stats.total_count).unwrap();
         dict.set_item("max_count", stats.max_count).unwrap();
         dict.set_item("min_count", stats.min_count).unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
         dict.set_item("conservative_update", stats.conservative_update)
             .unwrap();
 
@@ -691,24 +623,19 @@ pub struct LinearCounter {
 impl LinearCounter {
     /// Create a new Linear Counter.
     #[new]
-    fn new(num_bits: usize, use_simd: Option<bool>) -> Self {
+    fn new(num_bits: usize) -> Self {
         LinearCounter {
-            inner: linear::LinearCounter::new(num_bits, use_simd.unwrap_or(false)),
+            inner: linear::LinearCounter::new(num_bits),
         }
     }
 
     /// Create a Linear Counter with optimal size for expected cardinality.
     #[staticmethod]
-    fn with_expected_cardinality(
-        expected_cardinality: usize,
-        error_rate: f64,
-        use_simd: Option<bool>,
-    ) -> Self {
+    fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> Self {
         LinearCounter {
             inner: linear::LinearCounter::with_expected_cardinality(
                 expected_cardinality,
                 error_rate,
-                use_simd.unwrap_or(false),
             ),
         }
     }
@@ -766,7 +693,6 @@ impl LinearCounter {
         dict.set_item("should_transition", stats.should_transition)
             .unwrap();
         dict.set_item("memory_usage", stats.memory_usage).unwrap();
-        dict.set_item("uses_simd", stats.uses_simd).unwrap();
 
         dict.into()
     }

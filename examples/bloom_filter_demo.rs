@@ -7,7 +7,7 @@ fn main() {
     println!("1. Standard Bloom Filter");
     println!("{}", "-".repeat(30));
 
-    let mut bloom = BloomFilter::new(10000, 0.01, false);
+    let mut bloom = BloomFilter::new(10000, 0.01);
     println!("Created Bloom filter for 10,000 items with 1% error rate");
 
     // Add some items
@@ -41,7 +41,6 @@ fn main() {
         "  False positive probability: {:.6}",
         stats.false_positive_probability
     );
-    println!("  Using SIMD: {}", stats.uses_simd);
 
     println!();
     println!("{}", "=".repeat(50));
@@ -89,45 +88,25 @@ fn main() {
     println!();
     println!("{}", "=".repeat(50));
 
-    // Performance comparison
-    println!("\n3. Performance Comparison");
+    // Build throughput
+    println!("\n3. Build Throughput");
     println!("{}", "-".repeat(30));
 
     let n_items = 100000;
     println!("Testing with {n_items} items");
 
-    // Standard implementation
     let start = std::time::Instant::now();
-    let mut bloom_standard = BloomFilter::new(n_items, 0.01, false);
+    let mut bloom_bench = BloomFilter::new(n_items, 0.01);
     for i in 0..n_items {
-        bloom_standard.add(&format!("item_{i}"));
+        bloom_bench.add(&format!("item_{i}"));
     }
-    let standard_time = start.elapsed();
+    let build_time = start.elapsed();
 
-    // SIMD implementation (currently falls back to standard)
-    let start = std::time::Instant::now();
-    let mut bloom_simd = BloomFilter::new(n_items, 0.01, true);
-    for i in 0..n_items {
-        bloom_simd.add(&format!("item_{i}"));
-    }
-    let simd_time = start.elapsed();
+    println!("Build time: {build_time:?}");
 
-    println!("Standard implementation: {standard_time:?}");
-    println!("SIMD implementation: {simd_time:?}");
-    println!(
-        "Speedup: {:.2}x",
-        standard_time.as_nanos() as f64 / simd_time.as_nanos() as f64
-    );
-
-    // Verify both give same results
     let test_item = "test_item";
-    bloom_standard.add(&test_item);
-    bloom_simd.add(&test_item);
-
-    println!(
-        "Both contain test item: {}",
-        bloom_standard.contains(&test_item) && bloom_simd.contains(&test_item)
-    );
+    bloom_bench.add(&test_item);
+    println!("Contains test item: {}", bloom_bench.contains(&test_item));
 
     println!();
     println!("{}", "=".repeat(50));
@@ -136,7 +115,7 @@ fn main() {
     println!("\n4. False Positive Rate Analysis");
     println!("{}", "-".repeat(40));
 
-    let mut bloom_test = BloomFilter::new(10000, 0.01, false);
+    let mut bloom_test = BloomFilter::new(10000, 0.01);
 
     // Add 10,000 items
     for i in 0..10000 {

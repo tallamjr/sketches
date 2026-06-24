@@ -22,13 +22,17 @@
 //! - Configurable memory usage via capacity parameter
 //! - Serialization support for distributed computing
 
-use serde_json;
+use crate::hash::xxh3::Xxh3Hasher;
+use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
+use crate::serialization::{FAMILY_AOD, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+
+/// Serial format version for the AOD postcard payload.
+const AOD_SERIAL_VERSION: u8 = 1;
 
 /// Configuration for AOD sketch creation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AodConfig {
     /// Maximum number of entries before sampling
     pub capacity: usize,
@@ -49,7 +53,7 @@ impl Default for AodConfig {
 }
 
 /// Entry in an AOD sketch containing a hash and array of doubles
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AodEntry {
     /// Hash value of the key
     pub hash: u64,
@@ -64,7 +68,7 @@ impl AodEntry {
 }
 
 /// Array of Doubles Sketch for cardinality estimation with summary statistics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AodSketch {
     /// Configuration parameters
     pub config: AodConfig,
@@ -102,7 +106,7 @@ impl AodSketch {
     }
 
     /// Update the sketch with a key and array of values
-    pub fn update<T: Hash>(&mut self, key: &T, values: &[f64]) -> Result<(), String> {
+    pub fn update<T: Hashable + ?Sized>(&mut self, key: &T, values: &[f64]) -> Result<(), String> {
         if values.len() != self.config.num_values {
             return Err(format!(
                 "Expected {} values, got {}",
@@ -127,12 +131,14 @@ impl AodSketch {
         Ok(())
     }
 
-    /// Hash a key using the configured seed
-    fn hash_key<T: Hash>(&self, key: &T) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.config.seed.hash(&mut hasher);
-        key.hash(&mut hasher);
-        hasher.finish()
+    /// Hash a key using the canonical xxh3 backend.
+    ///
+    /// AOD is theta-family: the derived hash is the uniform sampling value, so
+    /// the top 64 bits of the 128-bit digest are used, matching the Theta and
+    /// Tuple sketches.
+    fn hash_key<T: Hashable + ?Sized>(&self, key: &T) -> u64 {
+        let h = hash128_of(&Xxh3Hasher, key, DEFAULT_SEED);
+        (h >> 64) as u64
     }
 
     /// Resize the sketch by reducing theta and removing entries
@@ -318,53 +324,39 @@ impl AodSketch {
         self.clone()
     }
 
-    /// Serialize sketch to bytes (simple implementation)
+    /// Serialize sketch to bytes using compact postcard binary encoding.
+    ///
+    /// Delegates to the [`Serializable`] trait so there is a single
+    /// serialisation code path shared with the rest of the library.
     pub fn to_bytes(&self) -> Vec<u8> {
-        // This is a simplified serialization - in production you'd want a more efficient format
-        let serialized = serde_json::json!({
-            "config": {
-                "capacity": self.config.capacity,
-                "num_values": self.config.num_values,
-                "seed": self.config.seed,
-            },
-            "theta": self.theta,
-            "is_empty": self.is_empty,
-            "entries": self.entries,
-        });
-
-        serde_json::to_vec(&serialized).unwrap_or_default()
+        Serializable::to_bytes(self)
     }
 
-    /// Deserialize sketch from bytes (simple implementation)
+    /// Deserialize sketch from bytes.
+    ///
+    /// Delegates to the [`Serializable`] trait, converting the structured
+    /// [`SerializationError`] into a `String` for this convenience signature.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let data: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|e| format!("Failed to parse JSON: {e}"))?;
+        <Self as Serializable>::from_bytes(bytes).map_err(|e| e.to_string())
+    }
+}
 
-        let config = AodConfig {
-            capacity: data["config"]["capacity"].as_u64().unwrap_or(4096) as usize,
-            num_values: data["config"]["num_values"].as_u64().unwrap_or(1) as usize,
-            seed: data["config"]["seed"].as_u64().unwrap_or(0),
-        };
+impl Serializable for AodSketch {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
 
-        let theta = data["theta"].as_f64().unwrap_or(1.0);
-        let is_empty = data["is_empty"].as_bool().unwrap_or(true);
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("AOD decode failed: {e}")))
+    }
 
-        let mut entries = HashMap::new();
-        if let Some(entries_obj) = data["entries"].as_object() {
-            for (key, value) in entries_obj {
-                if let (Ok(hash), Some(values_array)) = (key.parse::<u64>(), value.as_array()) {
-                    let values: Vec<f64> = values_array.iter().filter_map(|v| v.as_f64()).collect();
-                    entries.insert(hash, values);
-                }
-            }
-        }
+    fn family_id(&self) -> u8 {
+        FAMILY_AOD
+    }
 
-        Ok(Self {
-            config,
-            theta,
-            entries,
-            is_empty,
-        })
+    fn serial_version(&self) -> u8 {
+        AOD_SERIAL_VERSION
     }
 }
 
@@ -444,10 +436,16 @@ mod tests {
         assert!(sketch.theta() < 1.0);
         assert!(sketch.len() <= 10);
 
-        // Estimate should be higher than actual count due to sampling
+        // Estimate should be higher than the retained count due to sampling.
+        // With a tiny capacity (10), the retained sample is ~7 entries, so the
+        // theta estimator (len / theta) has a large relative error (~1/sqrt(7)).
+        // Allow one standard error of overshoot around the true cardinality of 100.
         let estimate = sketch.estimate();
         assert!(estimate > sketch.len() as f64);
-        assert!(estimate <= 100.0);
+        assert!(
+            estimate <= 100.0 * (1.0 + 1.0 / (sketch.len() as f64).sqrt()),
+            "estimate {estimate} exceeds expected upper band for cardinality 100"
+        );
     }
 
     #[test]
@@ -508,5 +506,56 @@ mod tests {
         assert_eq!(sketch.upper_bound(0.95), 0.0);
         assert_eq!(sketch.lower_bound(0.95), 0.0);
         assert_eq!(sketch.theta(), 1.0);
+    }
+
+    #[test]
+    fn test_aod_large_cardinality_accuracy_xxh3() {
+        // After migrating to the xxh3 backend, the theta-style estimator must
+        // stay accurate on a large known stream. 100k distinct keys with a
+        // capacity well below that forces sampling; estimate must be within a
+        // few percent of the true cardinality.
+        let mut sketch = AodSketch::with_capacity_and_values(4096, 1);
+        let n = 100_000usize;
+        for i in 0..n {
+            sketch.update(&format!("key_{i}"), &[1.0]).unwrap();
+        }
+        assert!(sketch.theta() < 1.0, "sampling should have triggered");
+        let estimate = sketch.estimate();
+        let error = (estimate - n as f64).abs() / n as f64;
+        assert!(
+            error < 0.05,
+            "AOD estimate {estimate} too far from {n} (relative error {error})"
+        );
+    }
+
+    #[test]
+    fn test_aod_serializable_trait_roundtrip() {
+        let mut sketch = AodSketch::with_capacity_and_values(4096, 3);
+        for i in 0..1000 {
+            sketch
+                .update(&format!("key_{i}"), &[i as f64, (i * 2) as f64, 1.0])
+                .unwrap();
+        }
+        let estimate = sketch.estimate();
+        let sums = sketch.column_sums();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let restored = <AodSketch as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.len(), sketch.len());
+        assert!((restored.estimate() - estimate).abs() < 1e-6);
+        assert_eq!(restored.column_sums(), sums);
+        assert_eq!(sketch.family_id(), FAMILY_AOD);
+        assert_eq!(sketch.serial_version(), AOD_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn aod_serialization_is_binary_not_json() {
+        let mut a = AodSketch::new();
+        a.update(&"k", &[1.0]).unwrap();
+        let bytes = a.to_bytes();
+        assert!(bytes.first() != Some(&b'{'), "must not be JSON");
+        let back = AodSketch::from_bytes(&bytes).unwrap();
+        assert_eq!(a.estimate(), back.estimate());
     }
 }

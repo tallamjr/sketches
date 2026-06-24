@@ -18,12 +18,18 @@
 //! capacities (capacity = k * 2^level), and the compaction strategy retains items from
 //! the end of the sorted sequence corresponding to the chosen accuracy mode.
 
+use crate::serialization::{FAMILY_REQ, Serializable, SerializationError};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+
+/// Serial format version for the REQ sketch postcard payload.
+const REQ_SERIAL_VERSION: u8 = 1;
 
 /// Accuracy mode for the REQ sketch.
 ///
 /// Determines which end of the rank domain receives the highest accuracy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReqMode {
     /// High Rank Accuracy: error converges to zero near rank 1.0.
     /// Best for tail quantiles (p95, p99, p99.9, p99.99).
@@ -39,7 +45,7 @@ pub enum ReqMode {
 /// exceeds its capacity, it is compacted: sorted, then alternately even/odd indexed
 /// items are retained (chosen randomly), with the discarded half's representative
 /// items promoted to the next level.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReqCompactor<T> {
     /// The level of this compactor (0 = bottom, receives raw input).
     level: usize,
@@ -193,7 +199,7 @@ fn xorshift64(state: &mut u64) -> u64 {
 /// let p99 = sketch.quantile(0.99).unwrap();
 /// assert!((p99 - 9900.0).abs() < 200.0);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReqSketch<T> {
     /// The k parameter controlling accuracy vs memory trade-off.
     k: usize,
@@ -516,6 +522,25 @@ where
     /// Get the k parameter.
     pub fn k(&self) -> usize {
         self.k
+    }
+}
+
+impl<T: Clone + PartialOrd + Serialize + DeserializeOwned> Serializable for ReqSketch<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("ReqSketch decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_REQ
+    }
+
+    fn serial_version(&self) -> u8 {
+        REQ_SERIAL_VERSION
     }
 }
 
@@ -993,6 +1018,36 @@ mod tests {
     // -----------------------------------------------------------------------
     // Xorshift PRNG test
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_req_serializable_roundtrip() {
+        let mut sketch = ReqSketch::new(12, ReqMode::HRA);
+        for i in 0..100_000 {
+            sketch.update(i as f64);
+        }
+        let count = sketch.count();
+        let min = *sketch.min().unwrap();
+        let max = *sketch.max().unwrap();
+        let p50 = sketch.quantile(0.5).unwrap();
+        let p99 = sketch.quantile(0.99).unwrap();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let mut restored = <ReqSketch<f64> as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.count(), count);
+        assert_eq!(*restored.min().unwrap(), min);
+        assert_eq!(*restored.max().unwrap(), max);
+        assert!(
+            (restored.quantile(0.5).unwrap() - p50).abs() < 1e-9,
+            "median must round-trip exactly"
+        );
+        assert!(
+            (restored.quantile(0.99).unwrap() - p99).abs() < 1e-9,
+            "p99 must round-trip exactly"
+        );
+        assert_eq!(sketch.family_id(), FAMILY_REQ);
+        assert_eq!(sketch.serial_version(), REQ_SERIAL_VERSION);
+    }
 
     #[test]
     fn test_xorshift64_produces_varied_output() {

@@ -13,9 +13,15 @@
 //! - Metwally, Agrawal, El Abbadi. "Efficient Computation of Frequent and Top-k
 //!   Elements in Data Streams." ICDT, 2005.
 
+use crate::serialization::{FAMILY_FREQUENT, Serializable, SerializationError};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
+
+/// Serial format version for the Frequent Items postcard payload.
+const FREQUENT_SERIAL_VERSION: u8 = 1;
 
 /// Query mode for retrieving frequent items with different error guarantees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +43,7 @@ pub enum ErrorType {
 /// Items are tracked with an offset that represents the maximum possible overcount.
 /// After a purge (when the map exceeds capacity), the offset increases by the minimum
 /// count that was subtracted from all entries.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct FrequentItemsSketch<T: Hash + Eq + Clone> {
     max_map_size: usize,
     stream_length: u64,
@@ -45,7 +52,7 @@ pub struct FrequentItemsSketch<T: Hash + Eq + Clone> {
 }
 
 /// Internal tracking entry for each item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ItemEntry {
     /// The raw count accumulated for this item within the sketch.
     count: u64,
@@ -207,7 +214,7 @@ impl<T: Hash + Eq + Clone> FrequentItemsSketch<T> {
             }
         }
 
-        results.sort_by(|a, b| b.estimate.cmp(&a.estimate));
+        results.sort_by_key(|b| std::cmp::Reverse(b.estimate));
         results
     }
 
@@ -224,7 +231,7 @@ impl<T: Hash + Eq + Clone> FrequentItemsSketch<T> {
             })
             .collect();
 
-        results.sort_by(|a, b| b.estimate.cmp(&a.estimate));
+        results.sort_by_key(|b| std::cmp::Reverse(b.estimate));
         results.truncate(k);
         results
     }
@@ -379,6 +386,26 @@ impl FrequentItemsSketch<String> {
         error_type: ErrorType,
     ) -> Vec<FrequentItemResult<String>> {
         self.get_frequent_items_with_error_type(threshold, error_type)
+    }
+}
+
+impl<T: Hash + Eq + Clone + Serialize + DeserializeOwned> Serializable for FrequentItemsSketch<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("FrequentItemsSketch decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_FREQUENT
+    }
+
+    fn serial_version(&self) -> u8 {
+        FREQUENT_SERIAL_VERSION
     }
 }
 
@@ -762,6 +789,65 @@ mod tests {
         // The heavy hitter should survive.
         assert!(sketch.get_estimate_for(&42).is_some());
         assert!(sketch.get_estimate_for(&42).unwrap() >= 99);
+    }
+
+    #[test]
+    fn test_frequent_serializable_roundtrip() {
+        let mut sketch = FrequentStringsSketch::new(64, false);
+        for i in 0..10_000 {
+            // Skewed distribution so some items are heavy hitters.
+            let bucket = i % 100;
+            let key = format!("k{bucket}");
+            for _ in 0..(100 - bucket).max(1) {
+                sketch.update(&key);
+            }
+        }
+        let stream_length = sketch.get_stream_length();
+        let offset = sketch.get_offset();
+        let top = sketch.get_top_k(5);
+        let top_pairs: Vec<(String, u64)> =
+            top.iter().map(|r| (r.item.clone(), r.estimate)).collect();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let restored = <FrequentStringsSketch as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.get_stream_length(), stream_length);
+        assert_eq!(restored.get_offset(), offset);
+        let restored_top = restored.get_top_k(5);
+        let restored_pairs: Vec<(String, u64)> = restored_top
+            .iter()
+            .map(|r| (r.item.clone(), r.estimate))
+            .collect();
+        assert_eq!(
+            restored_pairs, top_pairs,
+            "heavy-hitter estimates must match"
+        );
+        assert_eq!(sketch.family_id(), FAMILY_FREQUENT);
+        assert_eq!(sketch.serial_version(), FREQUENT_SERIAL_VERSION);
+    }
+
+    #[test]
+    fn test_frequent_generic_int_roundtrip() {
+        let mut sketch: FrequentItemsSketch<u64> = FrequentItemsSketch::new(64, false);
+        // A clear heavy hitter that must survive every purge.
+        for _ in 0..5000u64 {
+            sketch.update_item(&7u64);
+        }
+        for i in 0..40u64 {
+            sketch.update_item(&i);
+        }
+        let est_7 = sketch.get_estimate_for(&7).unwrap();
+
+        let bytes = Serializable::to_bytes(&sketch);
+        let restored = <FrequentItemsSketch<u64> as Serializable>::from_bytes(&bytes).unwrap();
+
+        assert_eq!(
+            restored.get_estimate_for(&7),
+            Some(est_7),
+            "heavy-hitter estimate must round-trip"
+        );
+        assert_eq!(restored.get_stream_length(), sketch.get_stream_length());
+        assert_eq!(restored.get_offset(), sketch.get_offset());
     }
 
     #[test]

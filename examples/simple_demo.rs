@@ -54,7 +54,7 @@ fn main() {
 
     // Bloom Filter Example
     println!("\n4. Bloom Filter:");
-    let mut bloom = BloomFilter::new(10000, 0.01, false); // capacity, error_rate, use_simd
+    let mut bloom = BloomFilter::new(10000, 0.01); // capacity, error_rate
 
     // Add items
     for i in 0..5000 {

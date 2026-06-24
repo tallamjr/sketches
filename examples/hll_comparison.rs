@@ -1,24 +1,6 @@
 use sketches::hll::{HllPlusPlusSketch, HllPlusPlusSparseSketch, HllSketch};
 use std::time::Instant;
 
-fn benchmark_sketch<F>(name: &str, mut update_fn: F, n: usize) -> (f64, u128)
-where
-    F: FnMut(&str),
-{
-    let start = Instant::now();
-
-    for i in 0..n {
-        update_fn(&format!("element_{i}"));
-    }
-
-    let duration = start.elapsed();
-    let estimate = 0.0; // Would need to return sketch to get estimate
-
-    println!("{name}: {duration:.2?} for {n} updates");
-
-    (estimate, duration.as_micros())
-}
-
 fn main() {
     println!("=== HyperLogLog Variants Comparison ===\n");
 
