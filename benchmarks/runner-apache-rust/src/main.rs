@@ -18,6 +18,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+// The counting `#[global_allocator]` is declared in the library
+// (`runner_apache_rust::counting_alloc`) so that both this binary and the
+// crate's own test build install it; the binary inherits it transitively.
+
 /// Default number of timed reps for the warmup+reps throughput protocol.
 const DEFAULT_REPS: usize = 30;
 

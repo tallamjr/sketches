@@ -21,6 +21,7 @@
 
 use std::path::Path;
 
+pub mod counting_alloc;
 pub mod timing;
 
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
@@ -87,15 +88,19 @@ fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         std::hint::black_box(&sketch);
     });
     // Build one more populated sketch outside the timing loop to read the row's
-    // estimate and serialised size.
-    let mut sketch = HllSketch::new(12, HllType::Hll8);
-    for item in items {
-        sketch.update(item.clone());
-    }
+    // estimate and serialised size, measuring the heap delta to build and hold
+    // it as `live_bytes`. The transient timed sketches above are freed before
+    // this measurement, so they do not perturb the delta.
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = HllSketch::new(12, HllType::Hll8);
+        for item in items {
+            s.update(item.clone());
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
-    // `live_bytes` is filled by Task 14.
     row(
         "hll",
         dataset,
@@ -105,7 +110,7 @@ fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -126,14 +131,16 @@ fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         }
         std::hint::black_box(&sketch);
     });
-    let mut sketch = CpcSketch::new(12);
-    for item in items {
-        sketch.update(item.clone());
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = CpcSketch::new(12);
+        for item in items {
+            s.update(item.clone());
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
-    // `live_bytes` is filled by Task 14.
     row(
         "cpc",
         dataset,
@@ -143,7 +150,7 @@ fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -164,14 +171,16 @@ fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> St
         }
         std::hint::black_box(&sketch);
     });
-    let mut sketch = ThetaSketch::builder().lg_k(12).build();
-    for item in items {
-        sketch.update(item.clone());
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = ThetaSketch::builder().lg_k(12).build();
+        for item in items {
+            s.update(item.clone());
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.compact(true).serialize().len();
-    // `live_bytes` is filled by Task 14.
     row(
         "theta",
         dataset,
@@ -181,7 +190,7 @@ fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> St
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -202,12 +211,14 @@ fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         }
         std::hint::black_box(&filter);
     });
-    let mut filter = BloomFilterBuilder::with_accuracy(n.max(1), 0.01).build();
-    for item in items {
-        filter.insert(item.clone());
-    }
+    let (filter, live) = counting_alloc::measure_live(|| {
+        let mut f = BloomFilterBuilder::with_accuracy(n.max(1), 0.01).build();
+        for item in items {
+            f.insert(item.clone());
+        }
+        f
+    });
     let bytes = filter.serialize().len();
-    // `live_bytes` is filled by Task 14.
     row(
         "bloom",
         dataset,
@@ -217,7 +228,7 @@ fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         None,
         None,
         None,
@@ -243,18 +254,20 @@ fn countmin_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         }
         std::hint::black_box(&sketch);
     });
-    let mut sketch = CountMinSketch::<u64>::new(5, 2048);
-    for item in items {
-        sketch.update(item.clone());
-    }
-    for _ in 0..HOT_KEY_COUNT {
-        sketch.update(HOT_KEY);
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = CountMinSketch::<u64>::new(5, 2048);
+        for item in items {
+            s.update(item.clone());
+        }
+        for _ in 0..HOT_KEY_COUNT {
+            s.update(HOT_KEY);
+        }
+        s
+    });
     let estimate = sketch.estimate(HOT_KEY) as f64;
     let exact = HOT_KEY_COUNT as f64;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
-    // `live_bytes` is filled by Task 14.
     row(
         "countmin",
         dataset,
@@ -264,7 +277,7 @@ fn countmin_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),

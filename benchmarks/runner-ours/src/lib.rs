@@ -89,15 +89,19 @@ fn hll_row_with<H: SketchHasher, T: Hashable>(
         core::hint::black_box(&sketch);
     });
     // Build one more populated sketch outside the timing loop to read the row's
-    // estimate and serialised size.
-    let mut sketch = HllSketchGeneric::<H>::new(12);
-    for item in items {
-        sketch.update(item);
-    }
+    // estimate and serialised size, measuring the heap delta to build and hold
+    // it as `live_bytes`. The transient timed sketches above are freed before
+    // this measurement, so they do not perturb the delta.
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = HllSketchGeneric::<H>::new(12);
+        for item in items {
+            s.update(item);
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // `live_bytes` is filled by Task 14.
     row(
         impl_label,
         "hll",
@@ -108,7 +112,7 @@ fn hll_row_with<H: SketchHasher, T: Hashable>(
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -143,14 +147,16 @@ fn cpc_row_with<H: SketchHasher, T: Hashable>(
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = CpcSketchGeneric::<H>::new(12);
-    for item in items {
-        sketch.update(item);
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = CpcSketchGeneric::<H>::new(12);
+        for item in items {
+            s.update(item);
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // `live_bytes` is filled by Task 14.
     row(
         impl_label,
         "cpc",
@@ -161,7 +167,7 @@ fn cpc_row_with<H: SketchHasher, T: Hashable>(
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -195,14 +201,16 @@ fn theta_row_with<H: SketchHasher, T: Hashable>(
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = ThetaSketchGeneric::<H>::new(4096);
-    for item in items {
-        sketch.update(item);
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = ThetaSketchGeneric::<H>::new(4096);
+        for item in items {
+            s.update(item);
+        }
+        s
+    });
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // `live_bytes` is filled by Task 14.
     row(
         impl_label,
         "theta",
@@ -213,7 +221,7 @@ fn theta_row_with<H: SketchHasher, T: Hashable>(
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -248,12 +256,14 @@ fn bloom_row_with<H: SketchHasher, T: Hashable>(
         }
         core::hint::black_box(&filter);
     });
-    let mut filter = BloomFilterGeneric::<H>::new(n as usize, 0.01);
-    for item in items {
-        filter.add(item);
-    }
+    let (filter, live) = counting_alloc::measure_live(|| {
+        let mut f = BloomFilterGeneric::<H>::new(n as usize, 0.01);
+        for item in items {
+            f.add(item);
+        }
+        f
+    });
     let bytes = filter.statistics().num_bits / 8;
-    // `live_bytes` is filled by Task 14.
     row(
         impl_label,
         "bloom",
@@ -264,7 +274,7 @@ fn bloom_row_with<H: SketchHasher, T: Hashable>(
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         None,
         None,
         None,
@@ -303,18 +313,20 @@ fn countmin_row_with<H: SketchHasher, T: Hashable>(
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = CountMinSketchGeneric::<H>::new(2048, 5, false);
-    for item in items {
-        sketch.increment(item);
-    }
-    for _ in 0..HOT_KEY_COUNT {
-        sketch.increment(HOT_KEY);
-    }
+    let (sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = CountMinSketchGeneric::<H>::new(2048, 5, false);
+        for item in items {
+            s.increment(item);
+        }
+        for _ in 0..HOT_KEY_COUNT {
+            s.increment(HOT_KEY);
+        }
+        s
+    });
     let estimate = sketch.estimate(HOT_KEY) as f64;
     let exact = HOT_KEY_COUNT as f64;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.statistics().total_cells * std::mem::size_of::<u64>();
-    // `live_bytes` is filled by Task 14.
     row(
         impl_label,
         "countmin",
@@ -325,7 +337,7 @@ fn countmin_row_with<H: SketchHasher, T: Hashable>(
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -352,17 +364,19 @@ fn kll_synthetic_row(n: u64, reps: usize) -> String {
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = KllSketch::<f64>::new(200);
-    for i in synthetic_distinct(n) {
-        sketch.update(i as f64);
-    }
+    let (mut sketch, live) = counting_alloc::measure_live(|| {
+        let mut s = KllSketch::<f64>::new(200);
+        for i in synthetic_distinct(n) {
+            s.update(i as f64);
+        }
+        s
+    });
     let estimate = sketch
         .quantile(0.5)
         .expect("KLL median over non-empty stream");
     let exact = n as f64 / 2.0;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // `live_bytes` is filled by Task 14.
     row(
         IMPL_OURS,
         "kll",
@@ -373,7 +387,7 @@ fn kll_synthetic_row(n: u64, reps: usize) -> String {
         median,
         stddev,
         Some(bytes),
-        None,
+        Some(live),
         Some(estimate),
         Some(exact),
         Some(rel_error),
