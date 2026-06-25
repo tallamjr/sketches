@@ -12,6 +12,7 @@
 
 use std::path::Path;
 
+pub mod counting_alloc;
 pub mod timing;
 
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
