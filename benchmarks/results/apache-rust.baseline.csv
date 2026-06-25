@@ -1,6 +1,6 @@
-implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
-apache-rust,hll,synthetic,distinct_count,1000000,95489696.948168,4136,990116.600737,1000000.000000,0.009883
-apache-rust,cpc,synthetic,distinct_count,1000000,61356122.469766,2496,993335.318875,1000000.000000,0.006665
-apache-rust,theta,synthetic,distinct_count,1000000,116825841.876223,52504,1002714.745231,1000000.000000,0.002715
-apache-rust,bloom,synthetic,build,1000000,16524817.359043,1198168,,,
-apache-rust,countmin,synthetic,point_query,1001000,24619067.278230,81944,1436.000000,1000.000000,0.436000
+implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+apache-rust,hll,synthetic,distinct_count,1000000,30,100355519.050307,9028154.719943,4136,4096,990116.600737,1000000.000000,0.009883
+apache-rust,cpc,synthetic,distinct_count,1000000,30,64962486.986742,694095.852420,2496,5120,993335.318875,1000000.000000,0.006665
+apache-rust,theta,synthetic,distinct_count,1000000,30,119065066.120792,2196582.253616,52504,65536,1002714.745231,1000000.000000,0.002715
+apache-rust,bloom,synthetic,build,1000000,30,17204284.524801,222161.029892,1198168,1198136,,,
+apache-rust,countmin,synthetic,point_query,1001000,30,25426921.697499,437004.171854,81944,81960,1436.000000,1000.000000,0.436000

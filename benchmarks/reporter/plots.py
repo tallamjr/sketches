@@ -33,6 +33,39 @@ _apply_tahoma()
 
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
+# Preferred left-to-right ordering for any implementation a CSV might carry.
+# `ours-murmur3` sits next to `ours` so the xxh3-vs-murmur3 hash effect reads at
+# a glance against `apache-rust`/`apache-cpp`; `apache` is the pip datasketches
+# label emitted by the Python plane. Implementations not listed here are kept in
+# first-seen order after these.
+IMPL_ORDER = [
+    "ours",
+    "ours-murmur3",
+    "apache-rust",
+    "apache-cpp",
+    "apache",
+]
+
+
+def _ordered_impls(rows):
+    """Implementations present in `rows`, in the preferred display order.
+
+    Every distinct ``implementation`` value in the data is rendered (so a plane
+    such as ``ours-murmur3`` or the Python ``apache`` plane is never silently
+    dropped). Known names follow IMPL_ORDER; unknown names follow in the order
+    they first appear.
+    """
+    present = []
+    seen = set()
+    for row in rows:
+        impl = row["implementation"]
+        if impl not in seen:
+            seen.add(impl)
+            present.append(impl)
+    ordered = [impl for impl in IMPL_ORDER if impl in seen]
+    ordered += [impl for impl in present if impl not in IMPL_ORDER]
+    return ordered
+
 
 def _as_float(value):
     if value is None:
@@ -67,6 +100,7 @@ def _grouped_bar(
     treated as zero error so a sketch without a stddev does not crash. When
     `yerr_field` is None the function behaves exactly as before (no error bars).
     """
+    impls = _ordered_impls(rows)
     groups = {}
     order = []
     for row in rows:
@@ -77,13 +111,13 @@ def _grouped_bar(
         groups[key][row["implementation"]] = row
 
     labels = []
-    series = {impl: [] for impl in IMPLEMENTATIONS}
-    errors = {impl: [] for impl in IMPLEMENTATIONS}
+    series = {impl: [] for impl in impls}
+    errors = {impl: [] for impl in impls}
     for key in order:
         impl_rows = groups[key]
         values = {}
         errs = {}
-        for impl in IMPLEMENTATIONS:
+        for impl in impls:
             r = impl_rows.get(impl)
             values[impl] = _as_float(r[field]) if r else None
             if yerr_field is not None and r is not None:
@@ -94,19 +128,19 @@ def _grouped_bar(
             continue
         sample = next(iter(impl_rows.values()))
         labels.append(_label(sample))
-        for impl in IMPLEMENTATIONS:
+        for impl in impls:
             series[impl].append(values[impl])
             errors[impl].append(errs[impl])
 
     fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
 
     n_groups = len(labels)
-    n_impls = len(IMPLEMENTATIONS)
+    n_impls = len(impls)
     bar_width = 0.8 / n_impls
     indices = list(range(n_groups))
 
     plotted_any = False
-    for offset, impl in enumerate(IMPLEMENTATIONS):
+    for offset, impl in enumerate(impls):
         heights = [v if v is not None else 0.0 for v in series[impl]]
         positions = [i + offset * bar_width for i in indices]
         if any(v is not None for v in series[impl]):
