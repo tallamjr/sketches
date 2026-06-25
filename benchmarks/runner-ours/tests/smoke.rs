@@ -9,8 +9,22 @@ fn header_has_new_columns() {
 }
 
 #[test]
+fn emits_reps_and_stddev_columns() {
+    let rows = runner_ours::run(1000, 5);
+    assert!(runner_ours::HEADER.contains("throughput_stddev"));
+    // skip the header line; every data row has 13 comma-separated fields
+    for r in &rows[1..] {
+        assert_eq!(
+            r.split(',').count(),
+            13,
+            "data row should have 13 columns: {r}"
+        );
+    }
+}
+
+#[test]
 fn emits_valid_schema_and_reasonable_hll() {
-    let lines = runner_ours::run(10_000);
+    let lines = runner_ours::run(10_000, 5);
 
     assert!(lines[0].starts_with(
         "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"

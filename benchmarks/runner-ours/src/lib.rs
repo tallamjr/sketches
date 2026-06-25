@@ -11,7 +11,6 @@
 //! synthetic-dataset rows; `run_tpch` produces the rows for a TPC-H column.
 
 use std::path::Path;
-use std::time::Instant;
 
 pub mod timing;
 
@@ -60,38 +59,41 @@ fn row(
     )
 }
 
-fn throughput(items: u64, elapsed_secs: f64) -> f64 {
-    if elapsed_secs > 0.0 {
-        items as f64 / elapsed_secs
-    } else {
-        0.0
-    }
-}
-
 /// HLL distinct-count row over a stream of `Hashable` items with known exact
-/// cardinality.
-fn hll_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) -> String {
+/// cardinality. Timed over `reps` warmup+timed reps, rebuilding the sketch each
+/// rep so build+update throughput is measured on a clean sketch.
+fn hll_row<T: sketches::hash::Hashable>(
+    dataset: &str,
+    items: &[T],
+    exact: f64,
+    reps: usize,
+) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = HllSketch::new(12);
+        for item in items {
+            sketch.update(item);
+        }
+        core::hint::black_box(&sketch);
+    });
+    // Build one more populated sketch outside the timing loop to read the row's
+    // estimate and serialised size.
     let mut sketch = HllSketch::new(12);
-    let start = Instant::now();
     for item in items {
         sketch.update(item);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing via `timing::timed_throughput`; Task 14 fills
-    // `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "hll",
         dataset,
         "distinct_count",
         n,
-        1,
-        throughput(n, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         Some(estimate),
@@ -103,27 +105,36 @@ fn hll_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) 
 /// CPC distinct-count row over a stream of `Hashable` items with known exact
 /// cardinality. Uses `lg_k = 12` to match the HLL/Theta configuration. Bytes is
 /// the serialised length via the `Serializable` trait.
-fn cpc_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) -> String {
+fn cpc_row<T: sketches::hash::Hashable>(
+    dataset: &str,
+    items: &[T],
+    exact: f64,
+    reps: usize,
+) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = CpcSketch::new(12);
+        for item in items {
+            sketch.update(item);
+        }
+        core::hint::black_box(&sketch);
+    });
     let mut sketch = CpcSketch::new(12);
-    let start = Instant::now();
     for item in items {
         sketch.update(item);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing; Task 14 fills `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "cpc",
         dataset,
         "distinct_count",
         n,
-        1,
-        throughput(n, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         Some(estimate),
@@ -133,27 +144,36 @@ fn cpc_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) 
 }
 
 /// Theta distinct-count row over a stream of `Hashable` items.
-fn theta_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) -> String {
+fn theta_row<T: sketches::hash::Hashable>(
+    dataset: &str,
+    items: &[T],
+    exact: f64,
+    reps: usize,
+) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = ThetaSketch::new(4096);
+        for item in items {
+            sketch.update(item);
+        }
+        core::hint::black_box(&sketch);
+    });
     let mut sketch = ThetaSketch::new(4096);
-    let start = Instant::now();
     for item in items {
         sketch.update(item);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing; Task 14 fills `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "theta",
         dataset,
         "distinct_count",
         n,
-        1,
-        throughput(n, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         Some(estimate),
@@ -165,25 +185,29 @@ fn theta_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64
 /// Bloom build row. A membership filter has no cardinality estimate, so the
 /// estimate/exact/rel_error fields are left empty. Bytes is the bit-array size
 /// in bytes (`num_bits / 8`), read from the filter's public statistics.
-fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String {
+fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut filter = BloomFilter::new(n as usize, 0.01);
+        for item in items {
+            filter.add(item);
+        }
+        core::hint::black_box(&filter);
+    });
     let mut filter = BloomFilter::new(n as usize, 0.01);
-    let start = Instant::now();
     for item in items {
         filter.add(item);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let bytes = filter.statistics().num_bits / 8;
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing; Task 14 fills `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "bloom",
         dataset,
         "build",
         n,
-        1,
-        throughput(n, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         None,
@@ -196,32 +220,39 @@ fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String 
 /// hot key is incremented `HOT_KEY_COUNT` times; the query is for that key.
 /// Bytes is the backing table size (`total_cells * 8`, the cells are `u64`),
 /// read from the sketch's public statistics.
-fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String {
+fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
+    let total_ops = n + HOT_KEY_COUNT;
+    let (median, stddev) = timing::timed_throughput(reps, true, total_ops, || {
+        let mut sketch = CountMinSketch::new(2048, 5, false);
+        for item in items {
+            sketch.increment(item);
+        }
+        for _ in 0..HOT_KEY_COUNT {
+            sketch.increment(HOT_KEY);
+        }
+        core::hint::black_box(&sketch);
+    });
     let mut sketch = CountMinSketch::new(2048, 5, false);
-    let start = Instant::now();
     for item in items {
         sketch.increment(item);
     }
     for _ in 0..HOT_KEY_COUNT {
         sketch.increment(HOT_KEY);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate(HOT_KEY) as f64;
     let exact = HOT_KEY_COUNT as f64;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.statistics().total_cells * std::mem::size_of::<u64>();
-    let total_ops = n + HOT_KEY_COUNT;
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing; Task 14 fills `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "countmin",
         dataset,
         "point_query",
         total_ops,
-        1,
-        throughput(total_ops, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         Some(estimate),
@@ -232,29 +263,33 @@ fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> Stri
 
 /// KLL median row over the synthetic numeric range. The exact median of
 /// `0..n` mapped to `f64` is `n / 2`.
-fn kll_synthetic_row(n: u64) -> String {
+fn kll_synthetic_row(n: u64, reps: usize) -> String {
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = KllSketch::<f64>::new(200);
+        for i in synthetic_distinct(n) {
+            sketch.update(i as f64);
+        }
+        core::hint::black_box(&sketch);
+    });
     let mut sketch = KllSketch::<f64>::new(200);
-    let start = Instant::now();
     for i in synthetic_distinct(n) {
         sketch.update(i as f64);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch
         .quantile(0.5)
         .expect("KLL median over non-empty stream");
     let exact = n as f64 / 2.0;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
-    // Placeholder timing stats: Task 10 replaces these with real
-    // warmup+reps timing; Task 14 fills `live_bytes`.
+    // `live_bytes` is filled by Task 14.
     row(
         "kll",
         "synthetic",
         "quantile_median",
         n,
-        1,
-        throughput(n, elapsed),
-        0.0,
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
         None,
         Some(estimate),
@@ -264,18 +299,18 @@ fn kll_synthetic_row(n: u64) -> String {
 }
 
 /// Produce all CSV lines for the synthetic dataset (header first).
-pub fn run(n: u64) -> Vec<String> {
+pub fn run(n: u64, reps: usize) -> Vec<String> {
     let synthetic: Vec<u64> = synthetic_distinct(n).collect();
     let exact = n as f64;
 
     vec![
         HEADER.to_string(),
-        hll_row("synthetic", &synthetic, exact),
-        cpc_row("synthetic", &synthetic, exact),
-        theta_row("synthetic", &synthetic, exact),
-        kll_synthetic_row(n),
-        bloom_row("synthetic", &synthetic),
-        countmin_row("synthetic", &synthetic),
+        hll_row("synthetic", &synthetic, exact, reps),
+        cpc_row("synthetic", &synthetic, exact, reps),
+        theta_row("synthetic", &synthetic, exact, reps),
+        kll_synthetic_row(n, reps),
+        bloom_row("synthetic", &synthetic, reps),
+        countmin_row("synthetic", &synthetic, reps),
     ]
 }
 
@@ -341,15 +376,16 @@ pub fn run_tpch(
     path: &Path,
     col: usize,
     dataset: &str,
+    reps: usize,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let values = tpch_column(path, col).map_err(Box::new)?;
     let exact = exact_distinct(values.iter().cloned()) as f64;
 
     Ok(vec![
-        hll_row(dataset, &values, exact),
-        cpc_row(dataset, &values, exact),
-        theta_row(dataset, &values, exact),
-        bloom_row(dataset, &values),
-        countmin_row(dataset, &values),
+        hll_row(dataset, &values, exact, reps),
+        cpc_row(dataset, &values, exact, reps),
+        theta_row(dataset, &values, exact, reps),
+        bloom_row(dataset, &values, reps),
+        countmin_row(dataset, &values, reps),
     ])
 }
