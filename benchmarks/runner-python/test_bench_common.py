@@ -1,4 +1,3 @@
-import statistics
 import bench_common as bc
 
 def test_median_and_stddev():
