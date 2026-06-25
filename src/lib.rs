@@ -27,6 +27,7 @@ pub mod aod;
 pub mod bloom;
 pub mod countmin;
 pub mod cpc;
+mod cpc_compression_data;
 mod cpc_tables;
 pub mod frequent;
 pub mod hll;
