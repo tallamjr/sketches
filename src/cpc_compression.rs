@@ -2,12 +2,9 @@
 //
 // Ported faithfully (logic-identical) from Apache DataSketches
 // (lib/datasketches-rust/datasketches/src/cpc/compression.rs). This module
-// holds the bit-buffer helpers and the four `low_level_*` pair/byte coders.
-// The higher-level flavour compressors that drive these are added in a later
-// task of this sub-project; until then a narrowly-scoped `dead_code` allow
-// covers the items that task will consume (every item is exercised by the
-// round-trip tests below).
-#![allow(dead_code)]
+// holds the bit-buffer helpers and the four `low_level_*` pair/byte coders,
+// plus the flavour-level `CompressedState` compress/uncompress that drive them.
+// The serialisation layer consumes this module to entropy-code the CPC state.
 
 use std::cmp::Ordering;
 

@@ -82,3 +82,32 @@ fn cpc_roundtrip_preserves_estimate_on_real_volume() {
     assert!((s.estimate() - back.estimate()).abs() < 1e-6);
     assert_eq!(s.num_coupons(), back.num_coupons());
 }
+
+#[test]
+fn cpc_compressed_roundtrip_is_lossless_and_smaller() {
+    use sketches::cpc::CpcSketch;
+    use sketches::serialization::Serializable;
+    for n in [100u64, 5_000, 100_000, 1_000_000] {
+        let mut s = CpcSketch::new(12);
+        for i in 0..n {
+            s.update(&i);
+        }
+        let bytes = s.to_bytes();
+        let back = CpcSketch::from_bytes(&bytes).unwrap();
+        assert_eq!(s.num_coupons(), back.num_coupons(), "n={n} coupons");
+        assert!(
+            (s.estimate() - back.estimate()).abs() < 1e-6,
+            "n={n} estimate"
+        );
+    }
+    // size: the previous raw format was ~4637 bytes at 1e6; compressed must be well under.
+    let mut s = CpcSketch::new(12);
+    for i in 0..1_000_000u64 {
+        s.update(&i);
+    }
+    let len = Serializable::to_bytes(&s).len();
+    assert!(
+        len < 3500,
+        "compressed cpc size {len} not materially below the raw ~4637"
+    );
+}

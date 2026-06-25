@@ -6069,16 +6069,16 @@ mod tests {
             &LENGTH_LIMITED_UNARY_ENCODING_TABLE65,
         );
         // high-entropy: all 22
-        for i in 0..22 {
-            validate(
-                &high_entropy_decoding_tables()[i],
-                &ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE[i],
-            );
+        let decoding_tables = high_entropy_decoding_tables();
+        for (decoding_table, encoding_table) in decoding_tables
+            .iter()
+            .zip(ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE.iter())
+        {
+            validate(decoding_table, encoding_table);
         }
     }
     fn validate(decoding_table: &[u16], encoding_table: &[u16]) {
-        for decode_this in 0..4096usize {
-            let tmp_d = decoding_table[decode_this];
+        for (decode_this, &tmp_d) in decoding_table.iter().enumerate().take(4096) {
             let decoded_byte = tmp_d & 0xff;
             let decoded_length = tmp_d >> 8;
             let tmp_e = encoding_table[decoded_byte as usize];

@@ -506,7 +506,7 @@ impl Serializable for ThetaSketch {
 // CPC serialisation constants
 // ---------------------------------------------------------------------------
 
-const CPC_SERIAL_VERSION: u8 = 1;
+const CPC_SERIAL_VERSION: u8 = 2;
 
 // ---------------------------------------------------------------------------
 // CpcSketch serialisation
@@ -514,8 +514,8 @@ const CPC_SERIAL_VERSION: u8 = 1;
 
 impl Serializable for CpcSketch {
     fn to_bytes(&self) -> Vec<u8> {
-        // Delegate to the inherent codec serialisation, which writes the full
-        // raw (uncompressed) state behind a Family::Cpc header.
+        // Delegate to the inherent codec serialisation, which writes the
+        // entropy-coded (compressed) state behind a Family::Cpc header.
         CpcSketch::to_bytes(self)
     }
 
@@ -1124,9 +1124,9 @@ mod tests {
         let restored = <CpcSketch as Serializable>::from_bytes(&bytes).unwrap();
 
         let restored_estimate = restored.estimate();
-        // Serialisation now stores the full raw state, so reconstruction is
-        // exact: the estimate, coupon count, and bit-matrix invariant must all
-        // be preserved precisely.
+        // Serialisation entropy-codes the flavour state losslessly, so
+        // reconstruction is exact: the estimate, coupon count, and bit-matrix
+        // invariant must all be preserved precisely.
         assert!(
             (original_estimate - restored_estimate).abs() < 1e-6,
             "CPC roundtrip estimate mismatch: {original_estimate:.6} vs {restored_estimate:.6}"

@@ -25,6 +25,7 @@
 //! - Use HLL when simplicity and merge performance matter more.
 
 use crate::codec::{CodecError, Family, SketchHeader, SketchReader, SketchWriter};
+use crate::cpc_compression::CompressedState;
 use crate::cpc_tables::{INVERSE_POWERS_OF_2, KXP_BYTE_TABLE};
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
@@ -36,7 +37,7 @@ const MIN_LG_K: u8 = 4;
 /// Maximum allowed lg_k.
 const MAX_LG_K: u8 = 26;
 /// Serial format version for the codec serialisation of CPC.
-const CPC_SERIAL_VERSION: u8 = 1;
+const CPC_SERIAL_VERSION: u8 = 2;
 
 /// The five flavour states of a CPC sketch, representing different
 /// compression modes as cardinality grows. Boundaries are expressed in terms
@@ -680,15 +681,6 @@ impl CpcSketch {
         &self.sliding_window
     }
 
-    /// The first interesting column (a speed-optimisation marker).
-    ///
-    /// Consumed by the byte-level serialisation in a later task of this
-    /// sub-project; exposed here alongside the other compressor accessors.
-    #[allow(dead_code)]
-    pub(crate) fn first_interesting_column(&self) -> u8 {
-        self.first_interesting_column
-    }
-
     /// The sliding-window offset.
     pub(crate) fn window_offset(&self) -> u8 {
         self.window_offset
@@ -704,7 +696,7 @@ impl CpcSketch {
     /// Mirrors how the reference feeds an [`UncompressedState`] back into a
     /// sketch: the window and surprising-value table are installed verbatim and
     /// every scalar (including the HIP/kxp estimator state) is restored exactly.
-    #[allow(clippy::too_many_arguments, dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_uncompressed(
         lg_k: u8,
         num_coupons: u32,
@@ -761,15 +753,21 @@ impl CpcSketch {
         *self = union.to_sketch();
     }
 
-    /// Serialise the sketch to bytes using the shared codec format.
+    /// Serialise the sketch to bytes using the shared codec format with the
+    /// surprising-value table and sliding window entropy-coded.
     ///
-    /// Writes the full raw (uncompressed) state: a [`SketchHeader`] tagged
-    /// [`Family::Cpc`] followed by the scalars, the length-prefixed sliding
-    /// window, and every populated entry of the surprising-value table. The
-    /// resulting bytes reconstruct an identical sketch via
+    /// Writes a [`SketchHeader`] tagged [`Family::Cpc`] (serial version 2)
+    /// followed by the persisted scalars (`lg_k`, `num_coupons`,
+    /// `first_interesting_column`, `window_offset`, `merge_flag`, `kxp`,
+    /// `hip_est_accum`) and the compressed payload produced by
+    /// [`CompressedState::compress`]. The compressed buffers are written
+    /// length-prefixed together with the word/entry counts the decompressor
+    /// needs. The resulting bytes reconstruct an identical sketch via
     /// [`from_bytes`](Self::from_bytes); HIP state is stored directly rather
     /// than recomputed by replay.
     pub fn to_bytes(&self) -> Vec<u8> {
+        let compressed = CompressedState::compress(self);
+
         let mut w = SketchWriter::new();
         SketchHeader {
             family: Family::Cpc,
@@ -786,23 +784,17 @@ impl CpcSketch {
         w.put_f64_le(self.kxp);
         w.put_f64_le(self.hip_est_accum);
 
-        // Sliding window: length-prefixed raw bytes.
-        w.put_u32_le(self.sliding_window.len() as u32);
-        w.put_bytes(&self.sliding_window);
-
-        // Surprising-value table: entry count then each populated row_col.
-        match &self.surprising_value_table {
-            Some(table) => {
-                w.put_u32_le(table.num_items);
-                for &row_col in table.slots() {
-                    if row_col != u32::MAX {
-                        w.put_u32_le(row_col);
-                    }
-                }
-            }
-            None => {
-                w.put_u32_le(0);
-            }
+        // Compressed payload. Each entropy-coded buffer is stored truncated to
+        // the number of words the coder actually used, length-prefixed, so the
+        // decompressor can drive the inverse coders with the exact counts.
+        w.put_u32_le(compressed.table_data_words as u32);
+        w.put_u32_le(compressed.table_num_entries);
+        for &word in &compressed.table_data[..compressed.table_data_words] {
+            w.put_u32_le(word);
+        }
+        w.put_u32_le(compressed.window_data_words as u32);
+        for &word in &compressed.window_data[..compressed.window_data_words] {
+            w.put_u32_le(word);
         }
 
         w.into_vec()
@@ -811,9 +803,10 @@ impl CpcSketch {
     /// Reconstruct a CPC sketch from the codec bytes produced by
     /// [`to_bytes`](Self::to_bytes).
     ///
-    /// Restores every field exactly: scalars and HIP state are read verbatim,
-    /// the sliding window is copied, and the surprising-value table is rebuilt
-    /// by re-inserting each stored `row_col` into a fresh [`PairTable`].
+    /// Restores the scalars and HIP state verbatim, rebuilds the
+    /// [`CompressedState`] from the stored buffers, decompresses it back into
+    /// the flavour state (surprising-value table plus sliding window), and
+    /// installs that state via [`from_uncompressed`](Self::from_uncompressed).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = SketchReader::new(bytes);
         SketchHeader::read_expecting(&mut r, Family::Cpc)?;
@@ -826,35 +819,38 @@ impl CpcSketch {
         let kxp = r.get_f64_le()?;
         let hip_est_accum = r.get_f64_le()?;
 
-        let window_len = r.get_u32_le()? as usize;
-        let sliding_window = r.get_bytes(window_len)?.to_vec();
+        let table_data_words = r.get_u32_le()? as usize;
+        let table_num_entries = r.get_u32_le()?;
+        let mut table_data = Vec::with_capacity(table_data_words);
+        for _ in 0..table_data_words {
+            table_data.push(r.get_u32_le()?);
+        }
+        let window_data_words = r.get_u32_le()? as usize;
+        let mut window_data = Vec::with_capacity(window_data_words);
+        for _ in 0..window_data_words {
+            window_data.push(r.get_u32_le()?);
+        }
 
-        let table_entries = r.get_u32_le()? as usize;
-        let surprising_value_table = if num_coupons == 0 {
-            None
-        } else {
-            // The table is built with the same lg-size as a fresh sparse
-            // sketch (see `row_col_update`); `maybe_insert` grows it as needed
-            // while the stored entries are re-inserted.
-            let mut table = PairTable::new(2, 6 + lg_k);
-            for _ in 0..table_entries {
-                let row_col = r.get_u32_le()?;
-                table.maybe_insert(row_col);
-            }
-            Some(table)
+        let compressed = CompressedState {
+            table_data,
+            table_data_words,
+            table_num_entries,
+            window_data,
+            window_data_words,
         };
 
-        Ok(CpcSketch {
+        let un = compressed.uncompress(lg_k, num_coupons);
+        Ok(CpcSketch::from_uncompressed(
             lg_k,
-            first_interesting_column,
             num_coupons,
-            surprising_value_table,
+            first_interesting_column,
             window_offset,
-            sliding_window,
             merge_flag,
             kxp,
             hip_est_accum,
-        })
+            un.table,
+            un.window,
+        ))
     }
 }
 
