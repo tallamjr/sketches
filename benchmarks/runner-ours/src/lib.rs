@@ -13,7 +13,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-mod timing;
+pub mod timing;
 
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
 use sketches::bloom::BloomFilter;
