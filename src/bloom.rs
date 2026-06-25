@@ -23,16 +23,20 @@
 //!   Communications of the ACM, 1970.
 
 use crate::hash::xxh3::Xxh3Hasher;
-use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
+use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
 
-/// Standard Bloom Filter implementation
-pub struct BloomFilter {
+/// Standard Bloom Filter implementation, generic over the hash backend.
+pub struct BloomFilterGeneric<H: SketchHasher> {
     bit_array: Vec<u64>,
     num_bits: usize,
     num_hash_functions: usize,
+    _hasher: core::marker::PhantomData<H>,
 }
 
-impl BloomFilter {
+/// Standard Bloom Filter using the default `Xxh3Hasher` backend.
+pub type BloomFilter = BloomFilterGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> BloomFilterGeneric<H> {
     /// Create a new Bloom filter
     ///
     /// # Arguments
@@ -51,10 +55,11 @@ impl BloomFilter {
 
         let num_u64s = num_bits.div_ceil(64);
 
-        BloomFilter {
+        BloomFilterGeneric {
             bit_array: vec![0u64; num_u64s],
             num_bits,
             num_hash_functions,
+            _hasher: core::marker::PhantomData,
         }
     }
 
@@ -84,8 +89,8 @@ impl BloomFilter {
 
     /// Generate hash values for an item using double hashing with xxh3
     fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
-        let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
-        let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
+        let hash1 = hash64_of(&H::default(), item, DEFAULT_SEED);
+        let hash2 = hash64_of(&H::default(), item, 0x517cc1b727220a95);
 
         // Use double hashing to generate multiple hash functions
         let mut hashes = Vec::with_capacity(self.num_hash_functions);
@@ -349,6 +354,18 @@ mod tests {
         assert!(stats.num_hash_functions > 0);
         assert_eq!(stats.bits_set, 0); // Empty filter
         assert_eq!(stats.fill_ratio, 0.0);
+    }
+
+    #[test]
+    fn murmur3_bloom_membership() {
+        use crate::hash::murmur3::Murmur3Hasher;
+        let mut f = BloomFilterGeneric::<Murmur3Hasher>::new(10_000, 0.01);
+        for i in 0u64..1_000 {
+            f.add(&i);
+        }
+        for i in 0u64..1_000 {
+            assert!(f.contains(&i));
+        }
     }
 
     #[test]
