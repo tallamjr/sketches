@@ -425,7 +425,7 @@ pub(crate) fn low_level_uncompress_bytes(
     );
 }
 
-use crate::cpc::CpcSketch;
+use crate::cpc::CpcSketchGeneric;
 use crate::cpc::Flavor;
 use crate::cpc::PairTable;
 use crate::cpc::determine_correct_offset;
@@ -434,6 +434,7 @@ use crate::cpc_compression_data::COLUMN_PERMUTATIONS_FOR_ENCODING;
 use crate::cpc_compression_data::ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE;
 use crate::cpc_compression_data::column_permutations_for_decoding;
 use crate::cpc_compression_data::high_entropy_decoding_tables;
+use crate::hash::SketchHasher;
 
 /// Compressed image of a CPC sketch's window and surprising-value table.
 ///
@@ -465,7 +466,7 @@ impl CompressedState {
     /// Compress the flavour-specific state of `source`.
     ///
     /// Reference: compression.rs:43.
-    pub(crate) fn compress(source: &CpcSketch) -> CompressedState {
+    pub(crate) fn compress<H: SketchHasher>(source: &CpcSketchGeneric<H>) -> CompressedState {
         let mut state = CompressedState::default();
         match source.flavor() {
             Flavor::Empty => {
@@ -494,7 +495,7 @@ impl CompressedState {
     }
 
     // Reference: compression.rs:69
-    fn compress_sparse_flavor(&mut self, source: &CpcSketch) {
+    fn compress_sparse_flavor<H: SketchHasher>(&mut self, source: &CpcSketchGeneric<H>) {
         debug_assert!(source.sliding_window().is_empty());
         let mut pairs = source.surprising_value_table_ref().occupied_pairs();
         pairs.sort_unstable();
@@ -502,7 +503,7 @@ impl CompressedState {
     }
 
     // Reference: compression.rs:76
-    fn compress_hybrid_flavor(&mut self, source: &CpcSketch) {
+    fn compress_hybrid_flavor<H: SketchHasher>(&mut self, source: &CpcSketchGeneric<H>) {
         debug_assert!(!source.sliding_window().is_empty());
         debug_assert_eq!(source.window_offset(), 0);
 
@@ -555,7 +556,7 @@ impl CompressedState {
     }
 
     // Reference: compression.rs:127
-    fn compress_pinned_flavor(&mut self, source: &CpcSketch) {
+    fn compress_pinned_flavor<H: SketchHasher>(&mut self, source: &CpcSketchGeneric<H>) {
         self.compress_sliding_window(source.sliding_window(), source.lg_k(), source.num_coupons());
         let mut pairs = source.surprising_value_table_ref().occupied_pairs();
         if !pairs.is_empty() {
@@ -575,7 +576,7 @@ impl CompressedState {
 
     // Complicated by the existence of both a left fringe and a right fringe.
     // Reference: compression.rs:147
-    fn compress_sliding_flavor(&mut self, source: &CpcSketch) {
+    fn compress_sliding_flavor<H: SketchHasher>(&mut self, source: &CpcSketchGeneric<H>) {
         self.compress_sliding_window(source.sliding_window(), source.lg_k(), source.num_coupons());
         let mut pairs = source.surprising_value_table_ref().occupied_pairs();
         if !pairs.is_empty() {

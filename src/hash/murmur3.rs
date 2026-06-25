@@ -3,7 +3,7 @@
 
 use crate::hash::SketchHasher;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Murmur3Hasher;
 
 #[inline]
