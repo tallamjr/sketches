@@ -4,7 +4,7 @@
 //! CSV row in the schema defined in `benchmarks/results/schema.md`:
 //!
 //! ```text
-//! implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
+//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
 //! ```
 //!
 //! The `implementation` field is always `ours` here. `run` produces the
@@ -25,8 +25,7 @@ use sketches::serialization::Serializable;
 use sketches::theta::ThetaSketch;
 
 /// The exact CSV header line shared by all runners.
-pub const HEADER: &str =
-    "implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error";
+pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error";
 
 const IMPLEMENTATION: &str = "ours";
 const HOT_KEY: &str = "__hot__";
@@ -42,18 +41,22 @@ fn row(
     dataset: &str,
     op: &str,
     n: u64,
-    throughput: f64,
+    reps: u64,
+    throughput_median: f64,
+    throughput_stddev: f64,
     bytes: Option<usize>,
+    live_bytes: Option<usize>,
     estimate: Option<f64>,
     exact: Option<f64>,
     rel_error: Option<f64>,
 ) -> String {
     let bytes = bytes.map(|b| b.to_string()).unwrap_or_default();
+    let live_bytes = live_bytes.map(|b| b.to_string()).unwrap_or_default();
     let estimate = estimate.map(|v| format!("{v:.6}")).unwrap_or_default();
     let exact = exact.map(|v| format!("{v:.6}")).unwrap_or_default();
     let rel_error = rel_error.map(|v| format!("{v:.6}")).unwrap_or_default();
     format!(
-        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{throughput:.6},{bytes},{estimate},{exact},{rel_error}"
+        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
     )
 }
 
@@ -78,13 +81,19 @@ fn hll_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) 
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing via `timing::timed_throughput`; Task 14 fills
+    // `live_bytes`.
     row(
         "hll",
         dataset,
         "distinct_count",
         n,
+        1,
         throughput(n, elapsed),
+        0.0,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -105,13 +114,18 @@ fn cpc_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64) 
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing; Task 14 fills `live_bytes`.
     row(
         "cpc",
         dataset,
         "distinct_count",
         n,
+        1,
         throughput(n, elapsed),
+        0.0,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -130,13 +144,18 @@ fn theta_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], exact: f64
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing; Task 14 fills `live_bytes`.
     row(
         "theta",
         dataset,
         "distinct_count",
         n,
+        1,
         throughput(n, elapsed),
+        0.0,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -155,13 +174,18 @@ fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> String 
     }
     let elapsed = start.elapsed().as_secs_f64();
     let bytes = filter.statistics().num_bits / 8;
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing; Task 14 fills `live_bytes`.
     row(
         "bloom",
         dataset,
         "build",
         n,
+        1,
         throughput(n, elapsed),
+        0.0,
         Some(bytes),
+        None,
         None,
         None,
         None,
@@ -188,13 +212,18 @@ fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T]) -> Stri
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.statistics().total_cells * std::mem::size_of::<u64>();
     let total_ops = n + HOT_KEY_COUNT;
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing; Task 14 fills `live_bytes`.
     row(
         "countmin",
         dataset,
         "point_query",
         total_ops,
+        1,
         throughput(total_ops, elapsed),
+        0.0,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -216,13 +245,18 @@ fn kll_synthetic_row(n: u64) -> String {
     let exact = n as f64 / 2.0;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.to_bytes().len();
+    // Placeholder timing stats: Task 10 replaces these with real
+    // warmup+reps timing; Task 14 fills `live_bytes`.
     row(
         "kll",
         "synthetic",
         "quantile_median",
         n,
+        1,
         throughput(n, elapsed),
+        0.0,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
