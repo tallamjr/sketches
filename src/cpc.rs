@@ -46,7 +46,7 @@ const CPC_SERIAL_VERSION: u8 = 1;
 /// whether the sliding window is allocated), so it is used to expose and
 /// assert flavour transitions in tests and to drive the union merge logic.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-enum Flavor {
+pub(crate) enum Flavor {
     Empty,   //    0  == C <    1
     Sparse,  //    1  <= C <   3K/32
     Hybrid,  // 3K/32 <= C <   K/2
@@ -58,7 +58,7 @@ enum Flavor {
 ///
 /// Ported from `cpc/mod.rs::determine_flavor`. Used by the [`CpcSketch::flavor`]
 /// accessor and the union merge logic.
-fn determine_flavor(lg_k: u8, num_coupons: u32) -> Flavor {
+pub(crate) fn determine_flavor(lg_k: u8, num_coupons: u32) -> Flavor {
     let k = 1u32 << lg_k;
     let c2 = num_coupons << 1;
     let c8 = num_coupons << 3;
@@ -80,7 +80,7 @@ fn determine_flavor(lg_k: u8, num_coupons: u32) -> Flavor {
 /// count.
 ///
 /// Ported from `cpc/mod.rs::determine_correct_offset`.
-fn determine_correct_offset(lg_k: u8, num_coupons: u32) -> u8 {
+pub(crate) fn determine_correct_offset(lg_k: u8, num_coupons: u32) -> u8 {
     let k = 1i64 << lg_k;
     let tmp = ((num_coupons as i64) << 3) - (19 * k); // 8C - 19K
     if tmp < 0 {
@@ -110,7 +110,7 @@ const DOWNSIZE_DENOMINATOR: u32 = 4;
 /// linear probing for collision resolution. Ported faithfully from
 /// `cpc/pair_table.rs`.
 #[derive(Debug, Clone)]
-struct PairTable {
+pub(crate) struct PairTable {
     /// log2 of number of slots.
     lg_size: u8,
     num_valid_bits: u8,
@@ -119,7 +119,7 @@ struct PairTable {
 }
 
 impl PairTable {
-    fn new(lg_size: u8, num_valid_bits: u8) -> Self {
+    pub(crate) fn new(lg_size: u8, num_valid_bits: u8) -> Self {
         assert!(
             (2..=26).contains(&lg_size),
             "lg_size must be in [2, 26], got {lg_size}"
@@ -138,6 +138,30 @@ impl PairTable {
 
     fn slots(&self) -> &[u32] {
         &self.slots
+    }
+
+    /// Return the occupied (non-empty) `row_col` pairs, sorted ascending.
+    pub(crate) fn occupied_pairs(&self) -> Vec<u32> {
+        let mut pairs: Vec<u32> = self
+            .slots
+            .iter()
+            .copied()
+            .filter(|&s| s != u32::MAX)
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
+    /// Build a `PairTable` from a slice of `row_col` pairs by inserting each.
+    ///
+    /// The table starts at the same lg-size as a fresh sparse sketch and grows
+    /// via `maybe_insert` as the pairs are added.
+    pub(crate) fn from_pairs(lg_k: u8, pairs: &[u32]) -> PairTable {
+        let mut table = PairTable::new(2, 6 + lg_k);
+        for &row_col in pairs {
+            table.maybe_insert(row_col);
+        }
+        table
     }
 
     fn clear(&mut self) {
@@ -365,7 +389,7 @@ impl CpcSketch {
         self.row_col_update(row_col);
     }
 
-    fn flavor(&self) -> Flavor {
+    pub(crate) fn flavor(&self) -> Flavor {
         determine_flavor(self.lg_k, self.num_coupons)
     }
 
@@ -637,6 +661,72 @@ impl CpcSketch {
     /// Get the first interesting column value (a speed-optimisation marker).
     pub fn first_interesting_col(&self) -> u8 {
         self.first_interesting_column
+    }
+
+    /// The occupied surprising-value pairs, sorted ascending (empty if EMPTY).
+    ///
+    /// Used by the compression round-trip tests and the byte-level
+    /// serialisation in a later task of this sub-project.
+    #[allow(dead_code)]
+    pub(crate) fn surprising_pairs(&self) -> Vec<u32> {
+        match &self.surprising_value_table {
+            Some(table) => table.occupied_pairs(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The raw sliding-window bytes (empty in sparse/empty flavours).
+    pub(crate) fn sliding_window(&self) -> &[u8] {
+        &self.sliding_window
+    }
+
+    /// The first interesting column (a speed-optimisation marker).
+    ///
+    /// Consumed by the byte-level serialisation in a later task of this
+    /// sub-project; exposed here alongside the other compressor accessors.
+    #[allow(dead_code)]
+    pub(crate) fn first_interesting_column(&self) -> u8 {
+        self.first_interesting_column
+    }
+
+    /// The sliding-window offset.
+    pub(crate) fn window_offset(&self) -> u8 {
+        self.window_offset
+    }
+
+    /// Reference to the surprising-value table, panicking if uninitialised.
+    pub(crate) fn surprising_value_table_ref(&self) -> &PairTable {
+        self.surprising_value_table()
+    }
+
+    /// Rebuild a sketch from uncompressed flavour state plus persisted scalars.
+    ///
+    /// Mirrors how the reference feeds an [`UncompressedState`] back into a
+    /// sketch: the window and surprising-value table are installed verbatim and
+    /// every scalar (including the HIP/kxp estimator state) is restored exactly.
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub(crate) fn from_uncompressed(
+        lg_k: u8,
+        num_coupons: u32,
+        first_interesting_column: u8,
+        window_offset: u8,
+        merge_flag: bool,
+        kxp: f64,
+        hip_est_accum: f64,
+        table: Option<PairTable>,
+        window: Vec<u8>,
+    ) -> CpcSketch {
+        CpcSketch {
+            lg_k,
+            first_interesting_column,
+            num_coupons,
+            surprising_value_table: table,
+            window_offset,
+            sliding_window: window,
+            merge_flag,
+            kxp,
+            hip_est_accum,
+        }
     }
 
     /// Validate the sketch by reconstructing its bit matrix and confirming the

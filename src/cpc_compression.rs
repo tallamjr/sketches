@@ -428,9 +428,407 @@ pub(crate) fn low_level_uncompress_bytes(
     );
 }
 
+use crate::cpc::CpcSketch;
+use crate::cpc::Flavor;
+use crate::cpc::PairTable;
+use crate::cpc::determine_correct_offset;
+use crate::cpc::determine_flavor;
+use crate::cpc_compression_data::COLUMN_PERMUTATIONS_FOR_ENCODING;
+use crate::cpc_compression_data::ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE;
+use crate::cpc_compression_data::column_permutations_for_decoding;
+use crate::cpc_compression_data::high_entropy_decoding_tables;
+
+/// Compressed image of a CPC sketch's window and surprising-value table.
+///
+/// Faithful port of the reference `CompressedState` (compression.rs:33). The
+/// surprising values are entropy-coded into `table_data` (`table_data_words`
+/// words used, `table_num_entries` pairs, which can differ from the sketch's
+/// coupon count in the hybrid flavour) and the sliding window into
+/// `window_data` (`window_data_words` words used). An empty `Vec` for either
+/// buffer means that flavour carries no data of that kind.
+#[derive(Default, Debug, Clone)]
+pub(crate) struct CompressedState {
+    pub(crate) table_data: Vec<u32>,
+    pub(crate) table_data_words: usize,
+    // can be different from the number of entries in the sketch in hybrid mode
+    pub(crate) table_num_entries: u32,
+    pub(crate) window_data: Vec<u32>,
+    pub(crate) window_data_words: usize,
+}
+
+/// Reconstructed flavour state: the surprising-value table (if any) and the
+/// sliding window bytes (empty in the sparse/empty flavours). Mirrors the
+/// reference `UncompressedState` (compression.rs:352).
+pub(crate) struct UncompressedState {
+    pub(crate) table: Option<PairTable>,
+    pub(crate) window: Vec<u8>,
+}
+
+impl CompressedState {
+    /// Compress the flavour-specific state of `source`.
+    ///
+    /// Reference: compression.rs:43.
+    pub(crate) fn compress(source: &CpcSketch) -> CompressedState {
+        let mut state = CompressedState::default();
+        match source.flavor() {
+            Flavor::Empty => {
+                // do nothing
+            }
+            Flavor::Sparse => {
+                state.compress_sparse_flavor(source);
+                debug_assert!(state.window_data.is_empty(), "window is not expected");
+                debug_assert!(!state.table_data.is_empty(), "table is expected");
+            }
+            Flavor::Hybrid => {
+                state.compress_hybrid_flavor(source);
+                debug_assert!(state.window_data.is_empty(), "window is not expected");
+                debug_assert!(!state.table_data.is_empty(), "table is expected");
+            }
+            Flavor::Pinned => {
+                state.compress_pinned_flavor(source);
+                debug_assert!(!state.window_data.is_empty(), "window is expected");
+            }
+            Flavor::Sliding => {
+                state.compress_sliding_flavor(source);
+                debug_assert!(!state.window_data.is_empty(), "window is expected");
+            }
+        }
+        state
+    }
+
+    // Reference: compression.rs:69
+    fn compress_sparse_flavor(&mut self, source: &CpcSketch) {
+        debug_assert!(source.sliding_window().is_empty());
+        let mut pairs = source.surprising_value_table_ref().occupied_pairs();
+        pairs.sort_unstable();
+        self.compress_surprising_values(&pairs, source.lg_k());
+    }
+
+    // Reference: compression.rs:76
+    fn compress_hybrid_flavor(&mut self, source: &CpcSketch) {
+        debug_assert!(!source.sliding_window().is_empty());
+        debug_assert_eq!(source.window_offset(), 0);
+
+        let k = 1usize << source.lg_k();
+        let mut pairs = source.surprising_value_table_ref().occupied_pairs();
+        pairs.sort_unstable();
+        let num_pairs_from_table = pairs.len();
+        let num_pairs_from_window = (source.num_coupons() as usize) - num_pairs_from_table;
+
+        let all_pairs_len = num_pairs_from_table + num_pairs_from_window;
+        let mut all_pairs = vec![0u32; all_pairs_len];
+        let window = source.sliding_window();
+        // tricky: read pairs from the sliding window
+        {
+            // The empty space that this leaves at the beginning of the output
+            // array will be filled later.
+            let mut idx = num_pairs_from_table;
+            for (row_index, &window_byte) in window.iter().enumerate().take(k) {
+                let mut byte = window_byte;
+                while byte != 0 {
+                    let col_index = byte.trailing_zeros();
+                    byte ^= 1 << col_index; // erase the 1
+                    all_pairs[idx] = ((row_index << 6) as u32) | col_index;
+                    idx += 1;
+                }
+            }
+            assert_eq!(idx, all_pairs_len);
+        }
+        // two-way merge of pairs_from_table and pairs_from_window into all_pairs
+        {
+            let mut final_idx = 0;
+            let mut table_idx = 0;
+            let mut window_idx = num_pairs_from_table;
+
+            while final_idx < all_pairs_len {
+                if table_idx < num_pairs_from_table
+                    && (window_idx >= all_pairs_len || pairs[table_idx] <= all_pairs[window_idx])
+                {
+                    all_pairs[final_idx] = pairs[table_idx];
+                    table_idx += 1;
+                } else {
+                    all_pairs[final_idx] = all_pairs[window_idx];
+                    window_idx += 1;
+                }
+                final_idx += 1;
+            }
+        }
+
+        self.compress_surprising_values(&all_pairs, source.lg_k());
+    }
+
+    // Reference: compression.rs:127
+    fn compress_pinned_flavor(&mut self, source: &CpcSketch) {
+        self.compress_sliding_window(source.sliding_window(), source.lg_k(), source.num_coupons());
+        let mut pairs = source.surprising_value_table_ref().occupied_pairs();
+        if !pairs.is_empty() {
+            // Here we subtract 8 from the column indices. Because they are
+            // stored in the low 6 bits of each row_col pair, and because no
+            // column index is less than 8 for a "Pinned" sketch, we can simply
+            // subtract 8 from the pairs themselves.
+            for pair in &mut pairs {
+                assert!(*pair & 63 >= 8, "pair column index is less than 8: {pair}");
+                *pair -= 8;
+            }
+
+            pairs.sort_unstable();
+            self.compress_surprising_values(&pairs, source.lg_k());
+        }
+    }
+
+    // Complicated by the existence of both a left fringe and a right fringe.
+    // Reference: compression.rs:147
+    fn compress_sliding_flavor(&mut self, source: &CpcSketch) {
+        self.compress_sliding_window(source.sliding_window(), source.lg_k(), source.num_coupons());
+        let mut pairs = source.surprising_value_table_ref().occupied_pairs();
+        if !pairs.is_empty() {
+            // Here we apply a complicated transformation to the column indices,
+            // which changes the implied ordering of the pairs, so we must do it
+            // before sorting.
+            let pseudo_phase = determine_pseudo_phase(source.lg_k(), source.num_coupons());
+            let permutation = &COLUMN_PERMUTATIONS_FOR_ENCODING[pseudo_phase as usize];
+            let offset = source.window_offset();
+            debug_assert!(offset <= 56);
+            for pair in &mut pairs {
+                let row_col = *pair;
+                let row = row_col >> 6;
+                let mut col = (row_col & 63) as u8;
+                // first rotate the columns into a canonical configuration:
+                //  new = ((old - (offset+8)) + 64) mod 64
+                col = (col + 56 - offset) & 63;
+                debug_assert!(col < 56);
+                // then apply the permutation
+                col = permutation[col as usize];
+                *pair = (row << 6) | (col as u32);
+            }
+
+            pairs.sort_unstable();
+            self.compress_surprising_values(&pairs, source.lg_k());
+        }
+    }
+
+    // Reference: compression.rs:176
+    fn compress_surprising_values(&mut self, pairs: &[u32], lg_k: u8) {
+        let k = 1u32 << lg_k;
+        let num_pairs = pairs.len() as u32;
+        let num_base_bits = golomb_choose_number_of_base_bits(k + num_pairs, num_pairs as u64);
+        let table_len = safe_length_for_compressed_pair_buf(k, num_pairs, num_base_bits);
+        self.table_data.resize(table_len, 0);
+
+        let compressed_words = low_level_compress_pairs(pairs, num_base_bits, &mut self.table_data);
+
+        self.table_data_words = compressed_words;
+        self.table_num_entries = num_pairs;
+    }
+
+    // Reference: compression.rs:193
+    fn compress_sliding_window(&mut self, window: &[u8], lg_k: u8, num_coupons: u32) {
+        let k = 1u32 << lg_k;
+        let window_buf_len = safe_length_for_compressed_window_buf(k);
+        self.window_data.resize(window_buf_len, 0);
+        let pseudo_phase = determine_pseudo_phase(lg_k, num_coupons);
+        let data_words = low_level_compress_bytes(
+            window,
+            k,
+            &ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE[pseudo_phase as usize],
+            &mut self.window_data,
+        );
+        self.window_data_words = data_words;
+    }
+
+    /// Reconstruct the flavour state from this compressed image.
+    ///
+    /// Reference: compression.rs:358.
+    pub(crate) fn uncompress(&self, lg_k: u8, num_coupons: u32) -> UncompressedState {
+        match determine_flavor(lg_k, num_coupons) {
+            Flavor::Empty => UncompressedState {
+                table: Some(PairTable::new(2, lg_k + 6)),
+                window: vec![],
+            },
+            Flavor::Sparse => self.uncompress_sparse_flavor(lg_k),
+            Flavor::Hybrid => self.uncompress_hybrid_flavor(lg_k),
+            Flavor::Pinned => self.uncompress_pinned_flavor(lg_k, num_coupons),
+            Flavor::Sliding => self.uncompress_sliding_flavor(lg_k, num_coupons),
+        }
+    }
+
+    // Reference: compression.rs:371
+    fn uncompress_sparse_flavor(&self, lg_k: u8) -> UncompressedState {
+        debug_assert!(self.window_data.is_empty(), "window is not expected");
+        debug_assert!(!self.table_data.is_empty(), "table is expected");
+
+        let pairs = uncompress_surprising_values(
+            &self.table_data,
+            self.table_data_words,
+            self.table_num_entries,
+            lg_k,
+        );
+
+        UncompressedState {
+            table: Some(PairTable::from_pairs(lg_k, &pairs)),
+            window: vec![],
+        }
+    }
+
+    // Reference: compression.rs:388
+    fn uncompress_hybrid_flavor(&self, lg_k: u8) -> UncompressedState {
+        debug_assert!(self.window_data.is_empty(), "window is not expected");
+        debug_assert!(!self.table_data.is_empty(), "table is expected");
+
+        let mut pairs = uncompress_surprising_values(
+            &self.table_data,
+            self.table_data_words,
+            self.table_num_entries,
+            lg_k,
+        );
+
+        // In the hybrid flavor, some of these pairs actually belong in the
+        // window, so we separate them out, moving the "true" pairs to the
+        // bottom of the array.
+        let k = 1usize << lg_k;
+        let mut window = vec![0u8; k]; // important: zero the memory
+        let mut next_true_pair = 0usize;
+        for i in 0..self.table_num_entries as usize {
+            let row_col = pairs[i];
+            assert_ne!(row_col, u32::MAX);
+            let col = row_col & 63;
+            if col < 8 {
+                let row = row_col >> 6;
+                window[row as usize] |= 1 << col; // set the window bit
+            } else {
+                pairs[next_true_pair] = row_col;
+                next_true_pair += 1;
+            }
+        }
+
+        UncompressedState {
+            table: Some(PairTable::from_pairs(lg_k, &pairs[..next_true_pair])),
+            window,
+        }
+    }
+
+    // Reference: compression.rs:423
+    fn uncompress_pinned_flavor(&self, lg_k: u8, num_coupons: u32) -> UncompressedState {
+        debug_assert!(!self.window_data.is_empty(), "window is expected");
+
+        let mut window = vec![];
+        uncompress_sliding_window(
+            &self.window_data,
+            self.window_data_words,
+            &mut window,
+            lg_k,
+            num_coupons,
+        );
+        let num_pairs = self.table_num_entries;
+        let table = if num_pairs == 0 {
+            PairTable::new(2, lg_k + 6)
+        } else {
+            debug_assert!(!self.table_data.is_empty(), "table is expected");
+            let mut pairs = uncompress_surprising_values(
+                &self.table_data,
+                self.table_data_words,
+                num_pairs,
+                lg_k,
+            );
+            // undo the compressor's 8-column shift
+            for pair in pairs.iter_mut() {
+                assert!((*pair & 63) < 56, "pair column index is invalid: {pair}",);
+                *pair += 8;
+            }
+            PairTable::from_pairs(lg_k, &pairs)
+        };
+        UncompressedState {
+            table: Some(table),
+            window,
+        }
+    }
+
+    // Reference: compression.rs:460
+    fn uncompress_sliding_flavor(&self, lg_k: u8, num_coupons: u32) -> UncompressedState {
+        debug_assert!(!self.window_data.is_empty(), "window is expected");
+
+        let mut window = vec![];
+        uncompress_sliding_window(
+            &self.window_data,
+            self.window_data_words,
+            &mut window,
+            lg_k,
+            num_coupons,
+        );
+        let num_pairs = self.table_num_entries;
+        let table = if num_pairs == 0 {
+            PairTable::new(2, lg_k + 6)
+        } else {
+            debug_assert!(!self.table_data.is_empty(), "table is expected");
+            let mut pairs = uncompress_surprising_values(
+                &self.table_data,
+                self.table_data_words,
+                num_pairs,
+                lg_k,
+            );
+            let pseudo_phase = determine_pseudo_phase(lg_k, num_coupons);
+            let permutation = &column_permutations_for_decoding()[pseudo_phase as usize];
+            let offset = determine_correct_offset(lg_k, num_coupons);
+            assert!(offset <= 56, "offset is invalid: {offset}");
+
+            for pair in pairs.iter_mut() {
+                let row_col = *pair;
+                let row = row_col >> 6;
+                let mut col = (row_col & 63) as u8;
+                // first undo the permutation
+                col = permutation[col as usize];
+                // then undo the rotation: old = (new + (offset+8)) mod 64
+                col = (col + (offset + 8)) & 63;
+                *pair = (row << 6) | (col as u32);
+            }
+
+            PairTable::from_pairs(lg_k, &pairs)
+        };
+        UncompressedState {
+            table: Some(table),
+            window,
+        }
+    }
+}
+
+// Reference: compression.rs:505
+fn uncompress_surprising_values(
+    data: &[u32],
+    data_words: usize,
+    num_pairs: u32,
+    lg_k: u8,
+) -> Vec<u32> {
+    let k = 1u32 << lg_k;
+    let mut pairs = vec![0u32; num_pairs as usize];
+    let num_base_bits = golomb_choose_number_of_base_bits(k + num_pairs, num_pairs as u64);
+    low_level_uncompress_pairs(&mut pairs, num_pairs, num_base_bits, data, data_words);
+    pairs
+}
+
+// Reference: compression.rs:518
+fn uncompress_sliding_window(
+    data: &[u32],
+    data_words: usize,
+    window: &mut Vec<u8>,
+    lg_k: u8,
+    num_coupons: u32,
+) {
+    let k = 1usize << lg_k;
+    window.resize(k, 0);
+    let pseudo_phase = determine_pseudo_phase(lg_k, num_coupons);
+    low_level_uncompress_bytes(
+        window,
+        k as u32,
+        data,
+        data_words,
+        &high_entropy_decoding_tables()[pseudo_phase as usize],
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpc::CpcSketch;
     use crate::cpc_compression_data::ENCODING_TABLES_FOR_HIGH_ENTROPY_BYTE;
     use crate::cpc_compression_data::high_entropy_decoding_tables;
 
@@ -478,5 +876,24 @@ mod tests {
             decoding_table,
         );
         assert_eq!(out, bytes);
+    }
+
+    #[test]
+    fn compress_uncompress_round_trip_across_flavours() {
+        for n in [100u64, 5_000, 100_000, 1_000_000] {
+            let mut s = CpcSketch::new(12);
+            for i in 0..n {
+                s.update(&i);
+            }
+            let comp = CompressedState::compress(&s);
+            let un = comp.uncompress(s.lg_k(), s.num_coupons());
+            assert_eq!(un.window, s.sliding_window(), "window mismatch n={n}");
+            let got: Vec<u32> = un
+                .table
+                .as_ref()
+                .map(|t| t.occupied_pairs())
+                .unwrap_or_default();
+            assert_eq!(got, s.surprising_pairs(), "pairs mismatch n={n}");
+        }
     }
 }
