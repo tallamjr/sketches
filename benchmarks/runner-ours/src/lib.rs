@@ -13,6 +13,8 @@
 use std::path::Path;
 use std::time::Instant;
 
+mod timing;
+
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
 use sketches::bloom::BloomFilter;
 use sketches::countmin::CountMinSketch;
