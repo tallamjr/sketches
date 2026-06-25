@@ -15,25 +15,126 @@
 //   runner_cpp --n <N> [--reps <R>] [--tpch <csv_path> --col <COL>] --out <results.csv>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <new>
 #include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+// Declare malloc_size directly rather than including <malloc/malloc.h>: under
+// GNU g++ on macOS that header transitively pulls in <mach/message.h>, whose
+// xnu_static_assert_struct_size macros fail to compile. The signature is stable
+// libSystem ABI, so a local extern "C" prototype is sufficient and portable
+// across both Apple clang and Homebrew g++.
+extern "C" size_t malloc_size(const void* ptr);
+#elif defined(__GLIBC__)
+#include <malloc.h>  // malloc_usable_size on glibc
+#endif
+
 #include "hll.hpp"
 #include "theta_sketch.hpp"
 #include "cpc_sketch.hpp"
 #include "bloom_filter.hpp"
 #include "count_min.hpp"
+
+// ---------------------------------------------------------------------------
+// Global allocation counter for per-sketch live-heap measurement.
+//
+// We override the global operator new/delete to track the number of live heap
+// bytes the process currently holds. To get a TRUE delta we must know the size
+// at delete time; rather than thread a manual prefix header through every
+// allocation we ask the allocator for the real block size:
+//   - macOS: malloc_size(ptr)
+//   - glibc: malloc_usable_size(ptr)
+//   - otherwise: fall back to the requested size stashed in a small header.
+//
+// The counter is process-wide (it sees datasketches-cpp internals and every
+// std container too); that is exactly what we want, because the per-sketch
+// delta is read OUTSIDE the timed reps via measure_live. Single-threaded
+// measurement, but the atomic keeps it sound regardless.
+// ---------------------------------------------------------------------------
+namespace bench_alloc {
+
+std::atomic<size_t> g_live_bytes{0};
+
+inline size_t live_bytes() { return g_live_bytes.load(std::memory_order_relaxed); }
+
+#if defined(__APPLE__) || defined(__GLIBC__)
+
+inline size_t block_size(void* ptr) {
+#if defined(__APPLE__)
+  return malloc_size(ptr);
+#else
+  return malloc_usable_size(ptr);
+#endif
+}
+
+inline void* counted_alloc(size_t size) {
+  // operator new must never return nullptr for a non-zero request; round 0 up
+  // to 1 so the allocation (and its bookkeeping) is well defined.
+  void* ptr = std::malloc(size == 0 ? 1 : size);
+  if (ptr == nullptr) {
+    throw std::bad_alloc();
+  }
+  g_live_bytes.fetch_add(block_size(ptr), std::memory_order_relaxed);
+  return ptr;
+}
+
+inline void counted_free(void* ptr) noexcept {
+  if (ptr == nullptr) {
+    return;
+  }
+  g_live_bytes.fetch_sub(block_size(ptr), std::memory_order_relaxed);
+  std::free(ptr);
+}
+
+#else  // portable prefix-header fallback (no malloc introspection available)
+
+inline void* counted_alloc(size_t size) {
+  const size_t header = sizeof(size_t);
+  void* base = std::malloc(header + (size == 0 ? 1 : size));
+  if (base == nullptr) {
+    throw std::bad_alloc();
+  }
+  *static_cast<size_t*>(base) = size;
+  g_live_bytes.fetch_add(size, std::memory_order_relaxed);
+  return static_cast<char*>(base) + header;
+}
+
+inline void counted_free(void* ptr) noexcept {
+  if (ptr == nullptr) {
+    return;
+  }
+  const size_t header = sizeof(size_t);
+  void* base = static_cast<char*>(ptr) - header;
+  g_live_bytes.fetch_sub(*static_cast<size_t*>(base), std::memory_order_relaxed);
+  std::free(base);
+}
+
+#endif
+
+}  // namespace bench_alloc
+
+void* operator new(std::size_t size) { return bench_alloc::counted_alloc(size); }
+void* operator new[](std::size_t size) { return bench_alloc::counted_alloc(size); }
+void operator delete(void* ptr) noexcept { bench_alloc::counted_free(ptr); }
+void operator delete[](void* ptr) noexcept { bench_alloc::counted_free(ptr); }
+// Sized deletes g++ may emit; the size is redundant since the allocator knows
+// the block size, so forward to the same counted_free.
+void operator delete(void* ptr, std::size_t) noexcept { bench_alloc::counted_free(ptr); }
+void operator delete[](void* ptr, std::size_t) noexcept { bench_alloc::counted_free(ptr); }
 
 namespace {
 
@@ -68,16 +169,18 @@ std::string format_f64(double value) {
   return out.str();
 }
 
-// Build one CSV row. Optional fields are passed as empty strings. The
-// `live_bytes` column is emitted as an empty placeholder until Phase P3.
+// Build one CSV row. Optional fields are passed as empty strings. `live_bytes`
+// is the net heap delta to build and hold one populated sketch, measured by
+// measure_live outside the timed reps.
 std::string row(const std::string& sketch, const std::string& dataset, const std::string& op,
                 uint64_t n, int reps, double throughput_median, double throughput_stddev,
-                const std::string& bytes, const std::string& estimate, const std::string& exact,
+                const std::string& bytes, const std::string& live_bytes,
+                const std::string& estimate, const std::string& exact,
                 const std::string& rel_error) {
   std::ostringstream out;
   out << IMPLEMENTATION << ',' << sketch << ',' << dataset << ',' << op << ',' << n << ',' << reps
       << ',' << format_f64(throughput_median) << ',' << format_f64(throughput_stddev) << ','
-      << bytes << ',' /* live_bytes placeholder */ << ',' << estimate << ',' << exact << ','
+      << bytes << ',' << live_bytes << ',' << estimate << ',' << exact << ','
       << rel_error;
   return out.str();
 }
@@ -144,6 +247,23 @@ std::pair<double, double> timed_throughput(int reps, bool warmup, uint64_t ops_p
   return {median(rates), stddev};
 }
 
+// Measure the net heap bytes attributable to building and holding ONE populated
+// sketch, the C++ analogue of the Rust runners' measure_live. `build` returns a
+// freshly populated sketch by value; we snapshot the live-byte counter before
+// and after its construction, then hand the still-alive sketch to `consume`
+// (which reads estimate/serialised size) before it goes out of scope. The delta
+// is saturating (returns 0 rather than underflowing) so transient allocator
+// noise can never produce a bogus huge number. Read OUTSIDE the timed reps.
+template <typename Build, typename Consume>
+size_t measure_live(const Build& build, const Consume& consume) {
+  const size_t before = bench_alloc::live_bytes();
+  auto sketch = build();
+  const size_t after = bench_alloc::live_bytes();
+  const size_t live = after > before ? after - before : 0;
+  consume(sketch);
+  return live;
+}
+
 // HLL distinct-count row. T is the item type fed to the sketch.
 template <typename T>
 std::string hll_row(const std::string& dataset, const std::vector<T>& items, double exact,
@@ -156,18 +276,27 @@ std::string hll_row(const std::string& dataset, const std::vector<T>& items, dou
     }
     do_not_optimize(sketch.get_estimate());
   });
-  // Build one more populated sketch outside the timing loop to read the row's
-  // estimate and serialised size.
-  datasketches::hll_sketch sketch(HLL_LG_K, datasketches::HLL_8);
-  for (const T& item : items) {
-    sketch.update(item);
-  }
-  const double estimate = sketch.get_estimate();
+  // Build one more populated sketch outside the timing loop, inside the
+  // measure_live scope, to read the row's estimate, serialised size and the
+  // net live-heap delta.
+  double estimate = 0.0;
+  uint32_t bytes = 0;
+  const size_t live = measure_live(
+      [&] {
+        datasketches::hll_sketch s(HLL_LG_K, datasketches::HLL_8);
+        for (const T& item : items) {
+          s.update(item);
+        }
+        return s;
+      },
+      [&](const datasketches::hll_sketch& s) {
+        estimate = s.get_estimate();
+        bytes = s.get_compact_serialization_bytes();
+      });
   const double rel_error = std::abs(estimate - exact) / exact;
-  const uint32_t bytes = sketch.get_compact_serialization_bytes();
   return row("hll", dataset, "distinct_count", n, reps, tput.first, tput.second,
-             std::to_string(bytes), format_f64(estimate), format_f64(exact),
-             format_f64(rel_error));
+             std::to_string(bytes), std::to_string(live), format_f64(estimate),
+             format_f64(exact), format_f64(rel_error));
 }
 
 // CPC distinct-count row. T is the item type fed to the sketch.
@@ -182,16 +311,24 @@ std::string cpc_row(const std::string& dataset, const std::vector<T>& items, dou
     }
     do_not_optimize(sketch.get_estimate());
   });
-  datasketches::cpc_sketch sketch(CPC_LG_K);
-  for (const T& item : items) {
-    sketch.update(item);
-  }
-  const double estimate = sketch.get_estimate();
+  double estimate = 0.0;
+  size_t bytes = 0;
+  const size_t live = measure_live(
+      [&] {
+        datasketches::cpc_sketch s(CPC_LG_K);
+        for (const T& item : items) {
+          s.update(item);
+        }
+        return s;
+      },
+      [&](const datasketches::cpc_sketch& s) {
+        estimate = s.get_estimate();
+        bytes = s.serialize().size();
+      });
   const double rel_error = std::abs(estimate - exact) / exact;
-  const size_t bytes = sketch.serialize().size();
   return row("cpc", dataset, "distinct_count", n, reps, tput.first, tput.second,
-             std::to_string(bytes), format_f64(estimate), format_f64(exact),
-             format_f64(rel_error));
+             std::to_string(bytes), std::to_string(live), format_f64(estimate),
+             format_f64(exact), format_f64(rel_error));
 }
 
 // Theta distinct-count row.
@@ -206,19 +343,27 @@ std::string theta_row(const std::string& dataset, const std::vector<T>& items, d
     }
     do_not_optimize(sketch.get_estimate());
   });
-  auto sketch = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
-  for (const T& item : items) {
-    sketch.update(item);
-  }
-  const double estimate = sketch.get_estimate();
+  double estimate = 0.0;
+  size_t bytes = 0;
+  const size_t live = measure_live(
+      [&] {
+        auto s = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
+        for (const T& item : items) {
+          s.update(item);
+        }
+        return s;
+      },
+      [&](const datasketches::update_theta_sketch& s) {
+        estimate = s.get_estimate();
+        // Bytes is the serialized size of the compact form, the comparable
+        // persisted footprint of the sketch.
+        const datasketches::compact_theta_sketch compact = s.compact();
+        bytes = compact.get_serialized_size_bytes();
+      });
   const double rel_error = std::abs(estimate - exact) / exact;
-  // Bytes is the serialized size of the compact form, the comparable
-  // persisted footprint of the sketch.
-  const datasketches::compact_theta_sketch compact = sketch.compact();
-  const size_t bytes = compact.get_serialized_size_bytes();
   return row("theta", dataset, "distinct_count", n, reps, tput.first, tput.second,
-             std::to_string(bytes), format_f64(estimate), format_f64(exact),
-             format_f64(rel_error));
+             std::to_string(bytes), std::to_string(live), format_f64(estimate),
+             format_f64(exact), format_f64(rel_error));
 }
 
 // Bloom build row. A membership filter has no cardinality estimate, so the
@@ -236,14 +381,19 @@ std::string bloom_row(const std::string& dataset, const std::vector<T>& items, i
     }
     do_not_optimize(filter.get_bits_used());
   });
-  datasketches::bloom_filter filter =
-      datasketches::bloom_filter::builder::create_by_accuracy(max_items, BLOOM_TARGET_FPP);
-  for (const T& item : items) {
-    filter.update(item);
-  }
-  const size_t bytes = filter.get_serialized_size_bytes();
+  size_t bytes = 0;
+  const size_t live = measure_live(
+      [&] {
+        datasketches::bloom_filter f =
+            datasketches::bloom_filter::builder::create_by_accuracy(max_items, BLOOM_TARGET_FPP);
+        for (const T& item : items) {
+          f.update(item);
+        }
+        return f;
+      },
+      [&](const datasketches::bloom_filter& f) { bytes = f.get_serialized_size_bytes(); });
   return row("bloom", dataset, "build", n, reps, tput.first, tput.second, std::to_string(bytes),
-             "", "", "");
+             std::to_string(live), "", "", "");
 }
 
 // Count-Min point-query row. Each item is incremented once, then a designated
@@ -262,20 +412,28 @@ std::string countmin_row(const std::string& dataset, const std::vector<T>& items
     }
     do_not_optimize(sketch.get_estimate(HOT_KEY));
   });
-  datasketches::count_min_sketch<uint64_t> sketch(COUNTMIN_NUM_HASHES, COUNTMIN_NUM_BUCKETS);
-  for (const T& item : items) {
-    sketch.update(item, 1);
-  }
-  for (uint64_t i = 0; i < HOT_KEY_COUNT; ++i) {
-    sketch.update(HOT_KEY, 1);
-  }
-  const double estimate = static_cast<double>(sketch.get_estimate(HOT_KEY));
+  double estimate = 0.0;
+  size_t bytes = 0;
+  const size_t live = measure_live(
+      [&] {
+        datasketches::count_min_sketch<uint64_t> s(COUNTMIN_NUM_HASHES, COUNTMIN_NUM_BUCKETS);
+        for (const T& item : items) {
+          s.update(item, 1);
+        }
+        for (uint64_t i = 0; i < HOT_KEY_COUNT; ++i) {
+          s.update(HOT_KEY, 1);
+        }
+        return s;
+      },
+      [&](const datasketches::count_min_sketch<uint64_t>& s) {
+        estimate = static_cast<double>(s.get_estimate(HOT_KEY));
+        bytes = s.get_serialized_size_bytes();
+      });
   const double exact = static_cast<double>(HOT_KEY_COUNT);
   const double rel_error = std::abs(estimate - exact) / exact;
-  const size_t bytes = sketch.get_serialized_size_bytes();
   return row("countmin", dataset, "point_query", total_ops, reps, tput.first, tput.second,
-             std::to_string(bytes), format_f64(estimate), format_f64(exact),
-             format_f64(rel_error));
+             std::to_string(bytes), std::to_string(live), format_f64(estimate),
+             format_f64(exact), format_f64(rel_error));
 }
 
 // The exact CSV header line for the multi-trial RMSE mode (--trials). This
@@ -454,6 +612,33 @@ void print_usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Self-check: build one populated sketch through the measured path and assert
+  // the live-heap delta is non-zero. This is the C++ analogue of a failing test
+  // (before the allocation counter was wired, this reported 0). A broken counter
+  // must abort the run so CI/the reviewer catches a misleading metric.
+  {
+    std::vector<uint64_t> probe;
+    probe.reserve(1000);
+    for (uint64_t i = 0; i < 1000; ++i) {
+      probe.push_back(i);
+    }
+    const size_t live = measure_live(
+        [&] {
+          datasketches::hll_sketch s(HLL_LG_K, datasketches::HLL_8);
+          for (uint64_t v : probe) {
+            s.update(v);
+          }
+          return s;
+        },
+        [](const datasketches::hll_sketch& s) { do_not_optimize(s.get_estimate()); });
+    if (live == 0) {
+      std::cerr << "runner_cpp: live_bytes self-check failed: measured 0 heap bytes for a "
+                   "populated HLL sketch; the allocation counter is broken"
+                << std::endl;
+      return 2;
+    }
+  }
+
   uint64_t n = 0;
   bool have_n = false;
   int reps = DEFAULT_REPS;
