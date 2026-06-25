@@ -46,6 +46,53 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
     assert "xxh3" in table
 
 
+def test_render_table_surfaces_ours_murmur3(tmp_path):
+    # The native plane emits both `ours` (xxh3) and `ours-murmur3` (MurmurHash3)
+    # rows. The data-driven table must render an `ours-murmur3` column alongside
+    # `ours`/`apache-rust`, not silently drop it.
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+
+    # An ours-murmur3 throughput/mem column header is present.
+    assert "ours-m3 tput" in table
+    assert "ours-m3 mem" in table
+    # Its throughput median figure appears on the joined row.
+    assert "3e+06" in table  # ours-murmur3 throughput median formatted
+    # The original ours/apache ratio columns still work.
+    assert "2.000 (ours)" in table
+
+
+def test_render_table_excludes_python_plane_labels(tmp_path):
+    # The Python plane emits `ours`/`apache` labels that collide with the Rust
+    # `ours`. They must not enter the native comparison table: only the native
+    # labels get columns, and no stray `apache` (bare) column is introduced.
+    rows_csv = _write_csv(
+        tmp_path,
+        "mixed.csv",
+        [
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "apache,hll,synthetic,update,1000,30,9000000,1000,128,2048,1010,1000,0.01",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+
+    # No bare `apache` column header (only native labels are columned).
+    assert "apache tput" not in table
+    # The python-plane throughput figure does not leak into the native table.
+    assert "9e+06" not in table
+
+
 def test_load_rows_parses_new_columns(tmp_path):
     csv = tmp_path / "ours.csv"
     csv.write_text(

@@ -1,6 +1,6 @@
 # Benchmarks
 
-A faithful, multi-plane benchmark harness comparing this crate's sketches
+A multi-plane benchmark harness comparing this crate's sketches
 against the Apache DataSketches implementations. Each runner is a standalone
 project (a cargo crate, a cmake build, or a Python driver) that emits the same
 fixed CSV schema, and the Python reporter joins, tabulates, plots, and gates
@@ -44,10 +44,10 @@ Swapping only the hasher (xxh3 to MurmurHash3) while holding everything else
 constant changed HLL build throughput substantially, from roughly 34M ops/s on
 the xxh3 path to roughly 160M ops/s on the murmur3 path. Because nothing else
 changed between `ours` and `ours-murmur3`, this points to the xxh3 path
-carrying a per-call cost on the hash-bound sketches. This is a measured
-observation to investigate, not a settled SOTA claim: it is recorded here so
-the next person knows where to look, and is exactly why the `ours-murmur3` plane
-exists.
+carrying a per-call cost on the hash-bound sketches. It is recorded here as a
+starting point for investigation so the next person knows where to look, and is
+why the `ours-murmur3` plane exists. On its own it does not support a SOTA speed
+claim.
 
 ## Coverage
 
@@ -72,7 +72,7 @@ Throughput is measured with a fixed protocol shared by every runner:
 The median is preferred over the mean so an occasional slow rep (scheduler
 preemption, GC, page fault) does not dominate the figure. The throughput plots
 carry the `throughput_stddev` as error bars, so run-to-run variance is visible
-rather than hidden.
+in the plot.
 
 ## Memory: `live_bytes` versus `bytes`
 

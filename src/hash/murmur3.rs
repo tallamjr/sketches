@@ -143,8 +143,7 @@ mod tests {
     }
 
     // Reference 128-bit digest for b"test", seed 0, as produced by the
-    // canonical Apache C++ MurmurHash3_x64_128. EXPECTED_TEST_SEED0 starts at 0
-    // so the test fails until Step 3 fills the real cross-checked value.
+    // canonical Apache C++ MurmurHash3_x64_128.
     // Cross-checked against the canonical Apache C++ MurmurHash3_x64_128
     // (lib/datasketches-cpp/common/include/MurmurHash3.h): for b"test" seed 0
     // the C++ reference yields h1=0xac7d28cc74bde19d, h2=0x9a128231f9bd4d82,

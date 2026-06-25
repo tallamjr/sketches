@@ -10,7 +10,7 @@
 //! Cardinality Estimation Algorithm" (2017), <https://arxiv.org/abs/1708.06839>.
 //!
 //! The core update path, flavour machinery, sliding window, surprising-value
-//! `PairTable`, and HIP/kxp accumulation are ported faithfully from the Apache
+//! `PairTable`, and HIP/kxp accumulation are ported from the Apache
 //! DataSketches Rust reference (`cpc/{sketch.rs,mod.rs,pair_table.rs}`). The
 //! only adaptation is the coupon derivation, which uses this crate's xxh3
 //! 128-bit hash split into two 64-bit halves in place of the reference's
@@ -109,7 +109,7 @@ const DOWNSIZE_DENOMINATOR: u32 = 4;
 /// A highly specialised hash table used for sparse data.
 ///
 /// Stores `(row, col)` pairs packed as `row_col = (row << 6) | col` and uses
-/// linear probing for collision resolution. Ported faithfully from
+/// linear probing for collision resolution. Ported from
 /// `cpc/pair_table.rs`.
 #[derive(Debug, Clone)]
 pub(crate) struct PairTable {
@@ -879,7 +879,7 @@ enum UnionState<H: SketchHasher> {
 
 /// CPC Union (merge) operation for combining multiple CPC sketches.
 ///
-/// Faithfully ported from the Apache DataSketches Rust reference
+/// Ported from the Apache DataSketches Rust reference
 /// (`cpc/union.rs`). The accumulating union ORs the window and surprising-value
 /// table of each source sketch into a bit matrix, downsampling lg_k where a
 /// source has a smaller lg_k, and reduces the matrix back to a sketch with

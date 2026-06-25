@@ -27,10 +27,10 @@ const FREQUENT_SERIAL_VERSION: u8 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorType {
     /// Only return items whose lower bound exceeds the threshold.
-    /// Guarantees no false positives: every returned item truly exceeds the threshold.
+    /// Guarantees no false positives: every returned item's true count exceeds the threshold.
     NoFalsePositives,
     /// Return items whose upper bound exceeds the threshold.
-    /// Guarantees no false negatives: every item that truly exceeds the threshold is returned.
+    /// Guarantees no false negatives: every item whose true count exceeds the threshold is returned.
     NoFalseNegatives,
 }
 

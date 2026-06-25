@@ -177,7 +177,7 @@ impl<H: SketchHasher> HllSketchGeneric<H> {
 
     /// Create an HllSketch from raw register bytes plus restored HIP state.
     ///
-    /// Used by deserialisation to faithfully reconstruct the in-order HIP
+    /// Used by deserialisation to reconstruct the in-order HIP
     /// estimate persisted alongside the registers.
     pub(crate) fn from_registers_with_hip(
         p: u8,

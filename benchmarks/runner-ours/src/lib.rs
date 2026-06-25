@@ -7,7 +7,9 @@
 //! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
 //! ```
 //!
-//! The `implementation` field is always `ours` here. `run` produces the
+//! This runner emits two `implementation` labels: `ours` for the crate default
+//! (xxh3-backed) sketches and `ours-murmur3` for the MurmurHash3-backed variants
+//! of the hash-based sketches (which isolate the hash effect). `run` produces the
 //! synthetic-dataset rows; `run_tpch` produces the rows for a TPC-H column.
 
 use std::path::Path;

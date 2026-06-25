@@ -1,6 +1,6 @@
 // Low-level bit-I/O and entropy coders for CPC compression.
 //
-// Ported faithfully (logic-identical) from Apache DataSketches
+// Ported (logic-identical) from Apache DataSketches
 // (lib/datasketches-rust/datasketches/src/cpc/compression.rs). This module
 // holds the bit-buffer helpers and the four `low_level_*` pair/byte coders,
 // plus the flavour-level `CompressedState` compress/uncompress that drive them.
@@ -438,7 +438,7 @@ use crate::hash::SketchHasher;
 
 /// Compressed image of a CPC sketch's window and surprising-value table.
 ///
-/// Faithful port of the reference `CompressedState` (compression.rs:33). The
+/// Port of the reference `CompressedState` (compression.rs:33). The
 /// surprising values are entropy-coded into `table_data` (`table_data_words`
 /// words used, `table_num_entries` pairs, which can differ from the sketch's
 /// coupon count in the hybrid flavour) and the sliding window into

@@ -58,6 +58,14 @@ NUMERIC_FIELDS = {
 
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
+# Native-plane implementation labels rendered by the comparison table, in the
+# preferred left-to-right order. `ours-murmur3` sits next to `ours` so the
+# xxh3-vs-murmur3 hash effect reads at a glance against the apache references.
+# The Python plane emits its own `ours`/`apache` labels that collide with the
+# Rust `ours`; those are excluded from this table (the plots and CSVs carry the
+# Python plane) so two different `ours` are never conflated.
+NATIVE_IMPL_ORDER = ["ours", "ours-murmur3", "apache-rust", "apache-cpp"]
+
 
 def load_rows(paths):
     """Load all rows from the given CSV paths into a list of dicts.
@@ -126,29 +134,53 @@ def _ratio_cell(ours, other, higher_is_better):
     return f"{ratio:.3f} ({better})"
 
 
+def _ordered_native_impls(rows):
+    """Native-plane implementations present in `rows`, in preferred display order.
+
+    Only the native-plane labels (NATIVE_IMPL_ORDER) are considered, so the
+    Python plane's colliding `ours`/`apache` labels never enter this table. Every
+    native label actually present in the data is returned, in NATIVE_IMPL_ORDER,
+    so `ours-murmur3` appears alongside `ours` whenever the runner emitted it.
+    """
+    present = {row["implementation"] for row in rows}
+    return [impl for impl in NATIVE_IMPL_ORDER if impl in present]
+
+
+# Short column labels for the native implementations, used as the per-impl
+# throughput/memory column headers.
+_IMPL_SHORT = {
+    "ours": "ours",
+    "ours-murmur3": "ours-m3",
+    "apache-rust": "a-rust",
+    "apache-cpp": "a-cpp",
+}
+
+
 def render_table(rows):
     """Render a markdown comparison table from loaded rows.
 
-    Rows are grouped by the join key (sketch, dataset, op). For each group the
-    table shows, per implementation, the throughput median (with its stddev),
-    live_bytes (the real heap delta) and rel_error, plus ours/apache-rust and
-    ours/apache-cpp ratios for the throughput median (higher is better) and
-    live_bytes (lower is better). The `plane` column labels the comparison plane
-    (the join key).
+    Rows are grouped by the join key (sketch, dataset, op). The set of
+    implementation columns is data-driven: every native-plane implementation
+    present in the rows (in NATIVE_IMPL_ORDER, so `ours-murmur3` sits next to
+    `ours`) gets a throughput-median (with stddev) and a live_bytes column. The
+    Python plane's colliding `ours`/`apache` labels are excluded so two different
+    `ours` are never conflated. The table also shows `ours`'s rel_error and the
+    ours/apache-rust and ours/apache-cpp ratios for throughput (higher is better)
+    and live_bytes (lower is better). The `plane` column labels the join key.
     """
     groups = {}
     for row in rows:
         groups.setdefault(_join_key(row), {})[row["implementation"]] = row
 
-    columns = [
-        "plane (sketch/dataset/op)",
-        "ours tput",
-        "a-rust tput",
-        "a-cpp tput",
-        "ours mem",
-        "a-rust mem",
-        "a-cpp mem",
-        "ours rel_err",
+    impls = _ordered_native_impls(rows)
+
+    columns = ["plane (sketch/dataset/op)"]
+    for impl in impls:
+        columns.append(f"{_IMPL_SHORT[impl]} tput")
+    for impl in impls:
+        columns.append(f"{_IMPL_SHORT[impl]} mem")
+    columns.append("ours rel_err")
+    columns += [
         "tput ours/a-rust",
         "tput ours/a-cpp",
         "mem ours/a-rust",
@@ -188,9 +220,6 @@ def render_table(rows):
         ours_t = tput(impl_rows, "ours")
         arust_t = tput(impl_rows, "apache-rust")
         acpp_t = tput(impl_rows, "apache-cpp")
-        ours_sd = tput_stddev(impl_rows, "ours")
-        arust_sd = tput_stddev(impl_rows, "apache-rust")
-        acpp_sd = tput_stddev(impl_rows, "apache-cpp")
         ours_m = live(impl_rows, "ours")
         arust_m = live(impl_rows, "apache-rust")
         acpp_m = live(impl_rows, "apache-cpp")
@@ -200,15 +229,15 @@ def render_table(rows):
         ours_re = ours_re.strip() if isinstance(ours_re, str) else str(ours_re)
         ours_re_disp = ours_re if ours_re != "" else "-"
 
-        cells = [
-            plane,
-            fmt_tput(ours_t, ours_sd),
-            fmt_tput(arust_t, arust_sd),
-            fmt_tput(acpp_t, acpp_sd),
-            fmt(ours_m),
-            fmt(arust_m),
-            fmt(acpp_m),
-            ours_re_disp,
+        cells = [plane]
+        for impl in impls:
+            cells.append(
+                fmt_tput(tput(impl_rows, impl), tput_stddev(impl_rows, impl))
+            )
+        for impl in impls:
+            cells.append(fmt(live(impl_rows, impl)))
+        cells.append(ours_re_disp)
+        cells += [
             _ratio_cell(ours_t, arust_t, higher_is_better=True),
             _ratio_cell(ours_t, acpp_t, higher_is_better=True),
             _ratio_cell(ours_m, arust_m, higher_is_better=False),
