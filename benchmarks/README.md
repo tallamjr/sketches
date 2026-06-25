@@ -16,23 +16,23 @@ into separate planes so no single number conflates them.
 Throughput and memory are measured across four Rust-and-C++ planes plus a
 Python plane. Each row's `implementation` column labels its plane.
 
-- `ours` -- this crate built with its default xxh3 hasher. The headline
+- `ours`: this crate built with its default xxh3 hasher. The headline
   implementation.
-- `ours-murmur3` -- this crate with the hasher swapped to MurmurHash3, the hash
+- `ours-murmur3`: this crate with the hasher swapped to MurmurHash3, the hash
   Apache uses. Same data structures and code paths as `ours`, only the hash
   differs. This plane exists to isolate the hash effect from implementation
   speed: comparing `ours` to `ours-murmur3` shows what the hash choice alone
   costs, and comparing `ours-murmur3` to `apache-rust` then compares
   implementations on an equal-hash footing.
-- `apache-rust` -- the Apache DataSketches Rust port (the reference impl vendored
+- `apache-rust`: the Apache DataSketches Rust port (the reference impl vendored
   under `lib/datasketches-rust/`).
-- `apache-cpp` -- the Apache DataSketches C++ library, built and driven by
+- `apache-cpp`: the Apache DataSketches C++ library, built and driven by
   `runner-cpp`.
 
 The Python plane is a separate language-runtime comparison:
 
-- `python-ours` -- our maturin wheel (the PyO3 bindings over this crate).
-- `python-apache` -- the pip `datasketches` package (Apache's official Python
+- `python-ours`: our maturin wheel (the PyO3 bindings over this crate).
+- `python-apache`: the pip `datasketches` package (Apache's official Python
   bindings over their C++ library).
 
 This isolates the cost of the Python interop layer on each side, rather than
@@ -99,7 +99,9 @@ Each plane measures `live_bytes` with the mechanism native to its runtime:
 
 - Accuracy is hard-gated. `make gate` runs our runner and fails the build if any
   sketch's relative error exceeds its per-sketch threshold in
-  `reporter/thresholds.json`. This is the metric that must not regress.
+  `reporter/thresholds.json`. The gate covers the sketches listed there (hll,
+  theta, kll, countmin, cpc); Bloom is a membership filter with no cardinality
+  estimate, so it is not accuracy-gated. This is the metric that must not regress.
 - Throughput and memory are tracked, not gated. They are recorded, plotted, and
   compared against committed baselines, but they do not fail the build. They
   inform tuning (see the hash observation above); they are not a pass/fail bar.

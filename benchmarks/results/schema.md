@@ -31,7 +31,7 @@ comparable points.
 | `throughput_median_ops_per_s` | float | operations / second | Median of the per-rep throughput (operations completed per wall-clock second) across the `reps` timed repetitions. |
 | `throughput_stddev`    | float   | operations / second | Population standard deviation of the per-rep throughput across the `reps` timed repetitions. |
 | `bytes`                | integer | bytes            | Serialised size of the sketch for this measurement (length of the byte buffer produced by serialisation). |
-| `live_bytes`           | integer | bytes            | Per-sketch live heap delta (resident memory attributable to the sketch). Populated in a later phase; emitted empty until then. |
+| `live_bytes`           | integer | bytes            | Per-sketch live heap delta: allocations minus frees while building and holding a populated sketch. Distinct from `bytes` (serialised size). Populated on all planes. |
 | `estimate`             | float   | items            | The sketch's estimated cardinality (or other estimated quantity for the op). |
 | `exact`                | float   | items            | The ground-truth exact value the estimate is compared against. |
 | `rel_error`            | float   | dimensionless    | Relative error of the estimate against the exact value: `(estimate - exact) / exact`. |
@@ -48,15 +48,13 @@ in preference to the mean so that an occasional slow rep (scheduler preemption,
 GC, page fault) does not dominate the reported figure.
 
 `bytes` is the serialised size of the sketch (the length of its byte buffer).
-`live_bytes` is the per-sketch live heap delta: the resident memory attributable
-to the sketch itself, which is measured and populated in a later phase and is
-emitted empty until then.
+`live_bytes` is the per-sketch live heap delta: allocations minus frees while
+building and holding a populated sketch. It is the in-memory working footprint,
+distinct from `bytes`, and is populated on all planes.
 
 ## Empty fields
 
 The `exact` and `rel_error` columns may be empty for operations where a ground
 truth is not applicable (for example a pure `serialize` or `merge` throughput
 measurement that produces no cardinality estimate). When `exact` is empty,
-`rel_error` is also empty. The `live_bytes` column is emitted empty until the
-later phase that wires real per-sketch heap measurement. All other columns are
-always populated.
+`rel_error` is also empty. All other columns are always populated.
