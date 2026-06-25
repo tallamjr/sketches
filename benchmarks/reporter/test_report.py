@@ -9,8 +9,8 @@ import plots
 import report
 
 HEADER = (
-    "implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,"
-    "estimate,exact,rel_error"
+    "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+    "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
 )
 
 
@@ -25,8 +25,8 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,5000000,128,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,2500000,144,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -34,21 +34,36 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
 
     # Both implementations' figures appear on the joined row.
     assert "hll/synthetic/update" in table
-    assert "5e+06" in table  # ours throughput formatted
-    assert "2.5e+06" in table  # apache-rust throughput formatted
+    assert "5e+06" in table  # ours throughput median formatted
+    assert "2.5e+06" in table  # apache-rust throughput median formatted
+    # Median is displayed with its stddev.
+    assert "4.5e+04" in table  # ours stddev formatted
     # A throughput ratio ours/apache-rust = 2.0 with 'ours' the better side.
     assert "2.000 (ours)" in table
-    # A bytes ratio 128/144 ~ 0.889 with 'ours' better (lower bytes).
+    # A live_bytes ratio 2048/2304 ~ 0.889 with 'ours' better (lower memory).
     assert "0.889 (ours)" in table
     # The attribution note explains throughput differences via hash choice.
     assert "xxh3" in table
+
+
+def test_load_rows_parses_new_columns(tmp_path):
+    csv = tmp_path / "ours.csv"
+    csv.write_text(
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+        "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,128,2048,1001.0,1000.0,0.001\n"
+    )
+    rows = report.load_rows([str(csv)])
+    r = rows[0]
+    assert r["throughput_stddev"] == 12345.0
+    assert r["live_bytes"] == 2048
 
 
 def test_check_accuracy_fails_when_over_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "over.csv",
-        ["ours,hll,synthetic,estimate,1000,0,128,1050,1000,0.05"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1050,1000,0.05"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -60,7 +75,7 @@ def test_check_accuracy_passes_when_under_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "under.csv",
-        ["ours,hll,synthetic,estimate,1000,0,128,1010,1000,0.01"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.01"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -72,7 +87,7 @@ def test_check_accuracy_notes_ungated_sketch(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "ungated.csv",
-        ["ours,mystery,synthetic,estimate,1000,0,128,1010,1000,0.5"],
+        ["ours,mystery,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.5"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -85,9 +100,9 @@ def test_render_plots_writes_three_pngs(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,5000000,128,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,2500000,144,1005,1000,0.005",
-            "ours,theta,synthetic,update,1000,3000000,256,1020,1000,0.02",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,theta,synthetic,update,1000,30,3000000,25000,256,4096,1020,1000,0.02",
         ],
     )
     rows = report.load_rows([rows_csv])

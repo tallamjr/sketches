@@ -37,6 +37,8 @@ IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 def _as_float(value):
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        return float(value)
     value = value.strip()
     if value == "":
         return None
@@ -214,18 +216,18 @@ def render_plots(rows, out_dir):
     written.append(
         _grouped_bar(
             rows,
-            field="throughput_ops_per_s",
+            field="throughput_median_ops_per_s",
             title="Throughput by sketch and implementation",
-            ylabel="throughput (ops/s)",
+            ylabel="throughput median (ops/s)",
             out_path=os.path.join(out_dir, "throughput.png"),
         )
     )
     written.append(
         _grouped_bar(
             rows,
-            field="bytes",
-            title="Serialised size by sketch and implementation",
-            ylabel="bytes",
+            field="live_bytes",
+            title="Memory footprint by sketch and implementation",
+            ylabel="live bytes",
             out_path=os.path.join(out_dir, "memory.png"),
         )
     )

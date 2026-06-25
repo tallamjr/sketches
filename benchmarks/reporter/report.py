@@ -4,13 +4,15 @@
 Ingests one or more result CSVs (emitted by runner-ours, runner-apache-rust,
 runner-cpp), all sharing the schema:
 
-    implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
+    implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,
+    throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
 
 Two modes:
 
 1. Default (table): group rows by the join key (sketch, dataset, op) and render
    a markdown comparison table across implementations, including ours/apache
-   ratios for throughput (higher is better) and bytes (lower is better).
+   ratios for throughput median (higher is better) and live_bytes (lower is
+   better, the real heap delta).
 
 2. --check-accuracy <thresholds.json>: for every `ours` row with a non-empty
    rel_error, gate the absolute relative error against the per-sketch threshold.
@@ -32,12 +34,27 @@ HEADER = [
     "dataset",
     "op",
     "n",
-    "throughput_ops_per_s",
+    "reps",
+    "throughput_median_ops_per_s",
+    "throughput_stddev",
     "bytes",
+    "live_bytes",
     "estimate",
     "exact",
     "rel_error",
 ]
+
+# Throughput-schema columns coerced to numbers when loaded. The remaining
+# columns (rel_error, estimate, exact, the join-key strings) stay as strings so
+# that check_accuracy's _as_float handling and the empty-string conventions are
+# preserved.
+NUMERIC_FIELDS = {
+    "reps": int,
+    "throughput_median_ops_per_s": float,
+    "throughput_stddev": float,
+    "bytes": int,
+    "live_bytes": int,
+}
 
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
@@ -61,7 +78,12 @@ def load_rows(paths):
                     f"expected {HEADER!r}"
                 )
             for record in reader:
-                rows.append(dict(record))
+                row = dict(record)
+                for field, cast in NUMERIC_FIELDS.items():
+                    value = row.get(field)
+                    if value is not None and value.strip() != "":
+                        row[field] = cast(value)
+                rows.append(row)
     return rows
 
 
@@ -70,9 +92,16 @@ def _join_key(row):
 
 
 def _as_float(value):
-    """Parse a CSV cell as a float, returning None when empty or unparseable."""
+    """Parse a cell as a float, returning None when empty or unparseable.
+
+    Accepts already-coerced numbers (load_rows casts the numeric throughput
+    columns) as well as raw strings (rel_error and the RMSE schema stay as
+    strings).
+    """
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        return float(value)
     value = value.strip()
     if value == "":
         return None
@@ -101,9 +130,11 @@ def render_table(rows):
     """Render a markdown comparison table from loaded rows.
 
     Rows are grouped by the join key (sketch, dataset, op). For each group the
-    table shows, per implementation, throughput_ops_per_s, bytes and rel_error,
-    plus ours/apache-rust and ours/apache-cpp ratios for throughput and bytes.
-    The `plane` column labels the comparison plane (the join key).
+    table shows, per implementation, the throughput median (with its stddev),
+    live_bytes (the real heap delta) and rel_error, plus ours/apache-rust and
+    ours/apache-cpp ratios for the throughput median (higher is better) and
+    live_bytes (lower is better). The `plane` column labels the comparison plane
+    (the join key).
     """
     groups = {}
     for row in rows:
@@ -114,14 +145,14 @@ def render_table(rows):
         "ours tput",
         "a-rust tput",
         "a-cpp tput",
-        "ours bytes",
-        "a-rust bytes",
-        "a-cpp bytes",
+        "ours mem",
+        "a-rust mem",
+        "a-cpp mem",
         "ours rel_err",
         "tput ours/a-rust",
         "tput ours/a-cpp",
-        "bytes ours/a-rust",
-        "bytes ours/a-cpp",
+        "mem ours/a-rust",
+        "mem ours/a-cpp",
     ]
 
     lines = []
@@ -130,14 +161,25 @@ def render_table(rows):
 
     def tput(impl_rows, impl):
         r = impl_rows.get(impl)
-        return _as_float(r["throughput_ops_per_s"]) if r else None
+        return _as_float(r["throughput_median_ops_per_s"]) if r else None
 
-    def nbytes(impl_rows, impl):
+    def tput_stddev(impl_rows, impl):
         r = impl_rows.get(impl)
-        return _as_float(r["bytes"]) if r else None
+        return _as_float(r.get("throughput_stddev")) if r else None
+
+    def live(impl_rows, impl):
+        r = impl_rows.get(impl)
+        return _as_float(r["live_bytes"]) if r else None
 
     def fmt(value):
         return f"{value:.3g}" if value is not None else "-"
+
+    def fmt_tput(median, stddev):
+        if median is None:
+            return "-"
+        if stddev is None:
+            return f"{median:.3g}"
+        return f"{median:.3g} ± {stddev:.3g}"
 
     for key in sorted(groups):
         impl_rows = groups[key]
@@ -146,28 +188,31 @@ def render_table(rows):
         ours_t = tput(impl_rows, "ours")
         arust_t = tput(impl_rows, "apache-rust")
         acpp_t = tput(impl_rows, "apache-cpp")
-        ours_b = nbytes(impl_rows, "ours")
-        arust_b = nbytes(impl_rows, "apache-rust")
-        acpp_b = nbytes(impl_rows, "apache-cpp")
+        ours_sd = tput_stddev(impl_rows, "ours")
+        arust_sd = tput_stddev(impl_rows, "apache-rust")
+        acpp_sd = tput_stddev(impl_rows, "apache-cpp")
+        ours_m = live(impl_rows, "ours")
+        arust_m = live(impl_rows, "apache-rust")
+        acpp_m = live(impl_rows, "apache-cpp")
 
         ours_row = impl_rows.get("ours")
         ours_re = ours_row["rel_error"] if ours_row else ""
-        ours_re = ours_re.strip() if ours_re else ""
+        ours_re = ours_re.strip() if isinstance(ours_re, str) else str(ours_re)
         ours_re_disp = ours_re if ours_re != "" else "-"
 
         cells = [
             plane,
-            fmt(ours_t),
-            fmt(arust_t),
-            fmt(acpp_t),
-            fmt(ours_b),
-            fmt(arust_b),
-            fmt(acpp_b),
+            fmt_tput(ours_t, ours_sd),
+            fmt_tput(arust_t, arust_sd),
+            fmt_tput(acpp_t, acpp_sd),
+            fmt(ours_m),
+            fmt(arust_m),
+            fmt(acpp_m),
             ours_re_disp,
             _ratio_cell(ours_t, arust_t, higher_is_better=True),
             _ratio_cell(ours_t, acpp_t, higher_is_better=True),
-            _ratio_cell(ours_b, arust_b, higher_is_better=False),
-            _ratio_cell(ours_b, acpp_b, higher_is_better=False),
+            _ratio_cell(ours_m, arust_m, higher_is_better=False),
+            _ratio_cell(ours_m, acpp_m, higher_is_better=False),
         ]
         lines.append("| " + " | ".join(cells) + " |")
 
