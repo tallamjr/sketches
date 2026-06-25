@@ -15,18 +15,25 @@ use std::path::Path;
 pub mod timing;
 
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
-use sketches::bloom::BloomFilter;
-use sketches::countmin::CountMinSketch;
-use sketches::cpc::CpcSketch;
-use sketches::hll::HllSketch;
+use sketches::bloom::BloomFilterGeneric;
+use sketches::countmin::CountMinSketchGeneric;
+use sketches::cpc::{CpcSketch, CpcSketchGeneric};
+use sketches::hash::murmur3::Murmur3Hasher;
+use sketches::hash::xxh3::Xxh3Hasher;
+use sketches::hash::{Hashable, SketchHasher};
+use sketches::hll::{HllSketch, HllSketchGeneric};
 use sketches::quantiles::KllSketch;
 use sketches::serialization::Serializable;
-use sketches::theta::ThetaSketch;
+use sketches::theta::{ThetaSketch, ThetaSketchGeneric};
 
 /// The exact CSV header line shared by all runners.
 pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error";
 
-const IMPLEMENTATION: &str = "ours";
+/// Implementation label for the crate default (xxh3-backed) sketches.
+const IMPL_OURS: &str = "ours";
+/// Implementation label for the murmur3-backed variants of the hash-based
+/// sketches, emitted to isolate the hash effect from the impl effect.
+const IMPL_MURMUR3: &str = "ours-murmur3";
 const HOT_KEY: &str = "__hot__";
 const HOT_KEY_COUNT: u64 = 1000;
 
@@ -36,6 +43,7 @@ const HOT_KEY_COUNT: u64 = 1000;
 /// header, so the argument count deliberately mirrors the schema.
 #[allow(clippy::too_many_arguments)]
 fn row(
+    implementation: &str,
     sketch: &str,
     dataset: &str,
     op: &str,
@@ -55,14 +63,17 @@ fn row(
     let exact = exact.map(|v| format!("{v:.6}")).unwrap_or_default();
     let rel_error = rel_error.map(|v| format!("{v:.6}")).unwrap_or_default();
     format!(
-        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
+        "{implementation},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
     )
 }
 
 /// HLL distinct-count row over a stream of `Hashable` items with known exact
-/// cardinality. Timed over `reps` warmup+timed reps, rebuilding the sketch each
-/// rep so build+update throughput is measured on a clean sketch.
-fn hll_row<T: sketches::hash::Hashable>(
+/// cardinality, built with hasher `H`. Timed over `reps` warmup+timed reps,
+/// rebuilding the sketch each rep so build+update throughput is measured on a
+/// clean sketch. The same body serves both the xxh3 default and the murmur3
+/// variant; only `H` and `impl_label` differ.
+fn hll_row_with<H: SketchHasher, T: Hashable>(
+    impl_label: &str,
     dataset: &str,
     items: &[T],
     exact: f64,
@@ -70,7 +81,7 @@ fn hll_row<T: sketches::hash::Hashable>(
 ) -> String {
     let n = items.len() as u64;
     let (median, stddev) = timing::timed_throughput(reps, true, n, || {
-        let mut sketch = HllSketch::new(12);
+        let mut sketch = HllSketchGeneric::<H>::new(12);
         for item in items {
             sketch.update(item);
         }
@@ -78,7 +89,7 @@ fn hll_row<T: sketches::hash::Hashable>(
     });
     // Build one more populated sketch outside the timing loop to read the row's
     // estimate and serialised size.
-    let mut sketch = HllSketch::new(12);
+    let mut sketch = HllSketchGeneric::<H>::new(12);
     for item in items {
         sketch.update(item);
     }
@@ -87,6 +98,7 @@ fn hll_row<T: sketches::hash::Hashable>(
     let bytes = sketch.to_bytes().len();
     // `live_bytes` is filled by Task 14.
     row(
+        impl_label,
         "hll",
         dataset,
         "distinct_count",
@@ -102,10 +114,21 @@ fn hll_row<T: sketches::hash::Hashable>(
     )
 }
 
+/// HLL row for the crate default (xxh3) hasher.
+fn hll_row<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    hll_row_with::<Xxh3Hasher, _>(IMPL_OURS, dataset, items, exact, reps)
+}
+
+/// HLL row for the murmur3 hasher, isolating the hash effect.
+fn hll_row_murmur3<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    hll_row_with::<Murmur3Hasher, _>(IMPL_MURMUR3, dataset, items, exact, reps)
+}
+
 /// CPC distinct-count row over a stream of `Hashable` items with known exact
-/// cardinality. Uses `lg_k = 12` to match the HLL/Theta configuration. Bytes is
-/// the serialised length via the `Serializable` trait.
-fn cpc_row<T: sketches::hash::Hashable>(
+/// cardinality, built with hasher `H`. Uses `lg_k = 12` to match the HLL/Theta
+/// configuration. Bytes is the serialised length via the `Serializable` trait.
+fn cpc_row_with<H: SketchHasher, T: Hashable>(
+    impl_label: &str,
     dataset: &str,
     items: &[T],
     exact: f64,
@@ -113,13 +136,13 @@ fn cpc_row<T: sketches::hash::Hashable>(
 ) -> String {
     let n = items.len() as u64;
     let (median, stddev) = timing::timed_throughput(reps, true, n, || {
-        let mut sketch = CpcSketch::new(12);
+        let mut sketch = CpcSketchGeneric::<H>::new(12);
         for item in items {
             sketch.update(item);
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = CpcSketch::new(12);
+    let mut sketch = CpcSketchGeneric::<H>::new(12);
     for item in items {
         sketch.update(item);
     }
@@ -128,6 +151,7 @@ fn cpc_row<T: sketches::hash::Hashable>(
     let bytes = sketch.to_bytes().len();
     // `live_bytes` is filled by Task 14.
     row(
+        impl_label,
         "cpc",
         dataset,
         "distinct_count",
@@ -143,8 +167,20 @@ fn cpc_row<T: sketches::hash::Hashable>(
     )
 }
 
-/// Theta distinct-count row over a stream of `Hashable` items.
-fn theta_row<T: sketches::hash::Hashable>(
+/// CPC row for the crate default (xxh3) hasher.
+fn cpc_row<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    cpc_row_with::<Xxh3Hasher, _>(IMPL_OURS, dataset, items, exact, reps)
+}
+
+/// CPC row for the murmur3 hasher, isolating the hash effect.
+fn cpc_row_murmur3<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    cpc_row_with::<Murmur3Hasher, _>(IMPL_MURMUR3, dataset, items, exact, reps)
+}
+
+/// Theta distinct-count row over a stream of `Hashable` items, built with
+/// hasher `H`.
+fn theta_row_with<H: SketchHasher, T: Hashable>(
+    impl_label: &str,
     dataset: &str,
     items: &[T],
     exact: f64,
@@ -152,13 +188,13 @@ fn theta_row<T: sketches::hash::Hashable>(
 ) -> String {
     let n = items.len() as u64;
     let (median, stddev) = timing::timed_throughput(reps, true, n, || {
-        let mut sketch = ThetaSketch::new(4096);
+        let mut sketch = ThetaSketchGeneric::<H>::new(4096);
         for item in items {
             sketch.update(item);
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = ThetaSketch::new(4096);
+    let mut sketch = ThetaSketchGeneric::<H>::new(4096);
     for item in items {
         sketch.update(item);
     }
@@ -167,6 +203,7 @@ fn theta_row<T: sketches::hash::Hashable>(
     let bytes = sketch.to_bytes().len();
     // `live_bytes` is filled by Task 14.
     row(
+        impl_label,
         "theta",
         dataset,
         "distinct_count",
@@ -182,25 +219,42 @@ fn theta_row<T: sketches::hash::Hashable>(
     )
 }
 
-/// Bloom build row. A membership filter has no cardinality estimate, so the
-/// estimate/exact/rel_error fields are left empty. Bytes is the bit-array size
-/// in bytes (`num_bits / 8`), read from the filter's public statistics.
-fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+/// Theta row for the crate default (xxh3) hasher.
+fn theta_row<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    theta_row_with::<Xxh3Hasher, _>(IMPL_OURS, dataset, items, exact, reps)
+}
+
+/// Theta row for the murmur3 hasher, isolating the hash effect.
+fn theta_row_murmur3<T: Hashable>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
+    theta_row_with::<Murmur3Hasher, _>(IMPL_MURMUR3, dataset, items, exact, reps)
+}
+
+/// Bloom build row, built with hasher `H`. A membership filter has no
+/// cardinality estimate, so the estimate/exact/rel_error fields are left empty.
+/// Bytes is the bit-array size in bytes (`num_bits / 8`), read from the
+/// filter's public statistics.
+fn bloom_row_with<H: SketchHasher, T: Hashable>(
+    impl_label: &str,
+    dataset: &str,
+    items: &[T],
+    reps: usize,
+) -> String {
     let n = items.len() as u64;
     let (median, stddev) = timing::timed_throughput(reps, true, n, || {
-        let mut filter = BloomFilter::new(n as usize, 0.01);
+        let mut filter = BloomFilterGeneric::<H>::new(n as usize, 0.01);
         for item in items {
             filter.add(item);
         }
         core::hint::black_box(&filter);
     });
-    let mut filter = BloomFilter::new(n as usize, 0.01);
+    let mut filter = BloomFilterGeneric::<H>::new(n as usize, 0.01);
     for item in items {
         filter.add(item);
     }
     let bytes = filter.statistics().num_bits / 8;
     // `live_bytes` is filled by Task 14.
     row(
+        impl_label,
         "bloom",
         dataset,
         "build",
@@ -216,15 +270,30 @@ fn bloom_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: usiz
     )
 }
 
-/// Count-Min point-query row. Each item is incremented once, then a designated
-/// hot key is incremented `HOT_KEY_COUNT` times; the query is for that key.
-/// Bytes is the backing table size (`total_cells * 8`, the cells are `u64`),
-/// read from the sketch's public statistics.
-fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+/// Bloom row for the crate default (xxh3) hasher.
+fn bloom_row<T: Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+    bloom_row_with::<Xxh3Hasher, _>(IMPL_OURS, dataset, items, reps)
+}
+
+/// Bloom row for the murmur3 hasher, isolating the hash effect.
+fn bloom_row_murmur3<T: Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+    bloom_row_with::<Murmur3Hasher, _>(IMPL_MURMUR3, dataset, items, reps)
+}
+
+/// Count-Min point-query row, built with hasher `H`. Each item is incremented
+/// once, then a designated hot key is incremented `HOT_KEY_COUNT` times; the
+/// query is for that key. Bytes is the backing table size (`total_cells * 8`,
+/// the cells are `u64`), read from the sketch's public statistics.
+fn countmin_row_with<H: SketchHasher, T: Hashable>(
+    impl_label: &str,
+    dataset: &str,
+    items: &[T],
+    reps: usize,
+) -> String {
     let n = items.len() as u64;
     let total_ops = n + HOT_KEY_COUNT;
     let (median, stddev) = timing::timed_throughput(reps, true, total_ops, || {
-        let mut sketch = CountMinSketch::new(2048, 5, false);
+        let mut sketch = CountMinSketchGeneric::<H>::new(2048, 5, false);
         for item in items {
             sketch.increment(item);
         }
@@ -233,7 +302,7 @@ fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: u
         }
         core::hint::black_box(&sketch);
     });
-    let mut sketch = CountMinSketch::new(2048, 5, false);
+    let mut sketch = CountMinSketchGeneric::<H>::new(2048, 5, false);
     for item in items {
         sketch.increment(item);
     }
@@ -246,6 +315,7 @@ fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: u
     let bytes = sketch.statistics().total_cells * std::mem::size_of::<u64>();
     // `live_bytes` is filled by Task 14.
     row(
+        impl_label,
         "countmin",
         dataset,
         "point_query",
@@ -259,6 +329,16 @@ fn countmin_row<T: sketches::hash::Hashable>(dataset: &str, items: &[T], reps: u
         Some(exact),
         Some(rel_error),
     )
+}
+
+/// Count-Min row for the crate default (xxh3) hasher.
+fn countmin_row<T: Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+    countmin_row_with::<Xxh3Hasher, _>(IMPL_OURS, dataset, items, reps)
+}
+
+/// Count-Min row for the murmur3 hasher, isolating the hash effect.
+fn countmin_row_murmur3<T: Hashable>(dataset: &str, items: &[T], reps: usize) -> String {
+    countmin_row_with::<Murmur3Hasher, _>(IMPL_MURMUR3, dataset, items, reps)
 }
 
 /// KLL median row over the synthetic numeric range. The exact median of
@@ -283,6 +363,7 @@ fn kll_synthetic_row(n: u64, reps: usize) -> String {
     let bytes = sketch.to_bytes().len();
     // `live_bytes` is filled by Task 14.
     row(
+        IMPL_OURS,
         "kll",
         "synthetic",
         "quantile_median",
@@ -305,12 +386,20 @@ pub fn run(n: u64, reps: usize) -> Vec<String> {
 
     vec![
         HEADER.to_string(),
+        // Default (xxh3) rows.
         hll_row("synthetic", &synthetic, exact, reps),
         cpc_row("synthetic", &synthetic, exact, reps),
         theta_row("synthetic", &synthetic, exact, reps),
         kll_synthetic_row(n, reps),
         bloom_row("synthetic", &synthetic, reps),
         countmin_row("synthetic", &synthetic, reps),
+        // Murmur3 variants of the five hash-based sketches (no KLL: it is
+        // comparison-based and uses no hasher). These isolate the hash effect.
+        hll_row_murmur3("synthetic", &synthetic, exact, reps),
+        cpc_row_murmur3("synthetic", &synthetic, exact, reps),
+        theta_row_murmur3("synthetic", &synthetic, exact, reps),
+        bloom_row_murmur3("synthetic", &synthetic, reps),
+        countmin_row_murmur3("synthetic", &synthetic, reps),
     ]
 }
 
@@ -382,10 +471,17 @@ pub fn run_tpch(
     let exact = exact_distinct(values.iter().cloned()) as f64;
 
     Ok(vec![
+        // Default (xxh3) rows.
         hll_row(dataset, &values, exact, reps),
         cpc_row(dataset, &values, exact, reps),
         theta_row(dataset, &values, exact, reps),
         bloom_row(dataset, &values, reps),
         countmin_row(dataset, &values, reps),
+        // Murmur3 variants, isolating the hash effect (no KLL here).
+        hll_row_murmur3(dataset, &values, exact, reps),
+        cpc_row_murmur3(dataset, &values, exact, reps),
+        theta_row_murmur3(dataset, &values, exact, reps),
+        bloom_row_murmur3(dataset, &values, reps),
+        countmin_row_murmur3(dataset, &values, reps),
     ])
 }
