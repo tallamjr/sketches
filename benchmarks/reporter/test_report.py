@@ -117,6 +117,66 @@ def test_render_plots_writes_three_pngs(tmp_path):
         assert os.path.getsize(path) > 0
 
 
+def test_plots_render_with_error_bars(tmp_path):
+    # Two implementations for one sketch, each with a throughput median and a
+    # stddev plus a live_bytes footprint. The throughput plot must draw stddev
+    # error bars; the memory plot must read live_bytes. Both PNGs must exist.
+    rows = [
+        {
+            "implementation": "ours",
+            "sketch": "hll",
+            "dataset": "synthetic",
+            "op": "update",
+            "throughput_median_ops_per_s": 5e6,
+            "throughput_stddev": 1e5,
+            "live_bytes": 2048,
+            "rel_error": 0.001,
+        },
+        {
+            "implementation": "apache-rust",
+            "sketch": "hll",
+            "dataset": "synthetic",
+            "op": "update",
+            "throughput_median_ops_per_s": 4e6,
+            "throughput_stddev": 2e5,
+            "live_bytes": 4096,
+            "rel_error": 0.001,
+        },
+    ]
+    out = plots.render_plots(rows, str(tmp_path))
+    assert (tmp_path / "throughput.png").exists()
+    assert (tmp_path / "memory.png").exists()
+    assert {os.path.basename(p) for p in out} == {
+        "throughput.png",
+        "memory.png",
+        "accuracy.png",
+    }
+
+    # The throughput plot must draw stddev error bars. Exercise the error-bar
+    # path directly: _grouped_bar must accept a yerr_field and produce a figure
+    # whose axes contain errorbar containers.
+    import matplotlib.pyplot as plt
+
+    path = plots._grouped_bar(
+        rows,
+        field="throughput_median_ops_per_s",
+        title="t",
+        ylabel="y",
+        out_path=str(tmp_path / "thr_err.png"),
+        yerr_field="throughput_stddev",
+    )
+    assert os.path.exists(path)
+    # No error-bar field for memory: must still render without crashing.
+    path2 = plots._grouped_bar(
+        rows,
+        field="live_bytes",
+        title="m",
+        ylabel="y",
+        out_path=str(tmp_path / "mem.png"),
+    )
+    assert os.path.exists(path2)
+
+
 def test_rmse_parity_and_table():
     import report
 

@@ -53,11 +53,19 @@ def _label(row):
     return f"{row['sketch']}\n{row['dataset']}/{row['op']}"
 
 
-def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
+def _grouped_bar(
+    rows, field, title, ylabel, out_path, require_field=False, yerr_field=None
+):
     """Render one grouped-bar chart (one bar per implementation per group).
 
     Groups are keyed by (sketch, dataset, op). When require_field is True only
     groups that have at least one non-empty value for `field` are plotted.
+
+    When `yerr_field` is provided, the per-bar value of that field is gathered
+    for each group and passed to ``ax.bar`` as ``yerr`` with a visible capsize,
+    drawing symmetric error bars. A missing or non-numeric stddev for a bar is
+    treated as zero error so a sketch without a stddev does not crash. When
+    `yerr_field` is None the function behaves exactly as before (no error bars).
     """
     groups = {}
     order = []
@@ -70,18 +78,25 @@ def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
 
     labels = []
     series = {impl: [] for impl in IMPLEMENTATIONS}
+    errors = {impl: [] for impl in IMPLEMENTATIONS}
     for key in order:
         impl_rows = groups[key]
         values = {}
+        errs = {}
         for impl in IMPLEMENTATIONS:
             r = impl_rows.get(impl)
             values[impl] = _as_float(r[field]) if r else None
+            if yerr_field is not None and r is not None:
+                errs[impl] = _as_float(r.get(yerr_field))
+            else:
+                errs[impl] = None
         if require_field and all(v is None for v in values.values()):
             continue
         sample = next(iter(impl_rows.values()))
         labels.append(_label(sample))
         for impl in IMPLEMENTATIONS:
             series[impl].append(values[impl])
+            errors[impl].append(errs[impl])
 
     fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
 
@@ -96,7 +111,12 @@ def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
         positions = [i + offset * bar_width for i in indices]
         if any(v is not None for v in series[impl]):
             plotted_any = True
-        ax.bar(positions, heights, bar_width, label=impl)
+        bar_kwargs = {"label": impl}
+        if yerr_field is not None:
+            # Missing/None stddev counts as zero error for that bar.
+            bar_kwargs["yerr"] = [e if e is not None else 0.0 for e in errors[impl]]
+            bar_kwargs["capsize"] = 3
+        ax.bar(positions, heights, bar_width, **bar_kwargs)
 
     centre = (n_impls - 1) * bar_width / 2.0
     ax.set_xticks([i + centre for i in indices])
@@ -220,6 +240,7 @@ def render_plots(rows, out_dir):
             title="Throughput by sketch and implementation",
             ylabel="throughput median (ops/s)",
             out_path=os.path.join(out_dir, "throughput.png"),
+            yerr_field="throughput_stddev",
         )
     )
     written.append(
