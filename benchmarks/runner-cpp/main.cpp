@@ -5,21 +5,28 @@
 // shared CSV schema so the reporter can join C++ reference numbers directly.
 //
 // Schema (must match benchmarks/runner-ours exactly):
-//   implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
+//   implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+//
+// Throughput follows the shared warmup+reps protocol: one untimed warmup pass,
+// then `reps` timed reps rebuilding a fresh sketch each rep, reporting the
+// median and population stddev of per-rep throughput.
 //
 // Usage:
-//   runner_cpp --n <N> [--tpch <csv_path> --col <COL>] --out <results.csv>
+//   runner_cpp --n <N> [--reps <R>] [--tpch <csv_path> --col <COL>] --out <results.csv>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "hll.hpp"
@@ -31,11 +38,14 @@
 namespace {
 
 const char* const HEADER =
-    "implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error";
+    "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,"
+    "bytes,live_bytes,estimate,exact,rel_error";
 
 const char* const IMPLEMENTATION = "apache-cpp";
 const std::string HOT_KEY = "__hot__";
 const uint64_t HOT_KEY_COUNT = 1000;
+// Default number of timed reps for the warmup+reps throughput protocol.
+const int DEFAULT_REPS = 30;
 
 // HLL configuration matching runner-ours (lg_k = 12).
 const uint8_t HLL_LG_K = 12;
@@ -58,84 +68,155 @@ std::string format_f64(double value) {
   return out.str();
 }
 
-double throughput(uint64_t items, double elapsed_secs) {
-  if (elapsed_secs > 0.0) {
-    return static_cast<double>(items) / elapsed_secs;
-  }
-  return 0.0;
-}
-
-// Build one CSV row. Optional fields are passed as empty strings.
+// Build one CSV row. Optional fields are passed as empty strings. The
+// `live_bytes` column is emitted as an empty placeholder until Phase P3.
 std::string row(const std::string& sketch, const std::string& dataset, const std::string& op,
-                uint64_t n, double throughput_ops, const std::string& bytes,
-                const std::string& estimate, const std::string& exact,
+                uint64_t n, int reps, double throughput_median, double throughput_stddev,
+                const std::string& bytes, const std::string& estimate, const std::string& exact,
                 const std::string& rel_error) {
   std::ostringstream out;
-  out << IMPLEMENTATION << ',' << sketch << ',' << dataset << ',' << op << ',' << n << ','
-      << format_f64(throughput_ops) << ',' << bytes << ',' << estimate << ',' << exact << ','
+  out << IMPLEMENTATION << ',' << sketch << ',' << dataset << ',' << op << ',' << n << ',' << reps
+      << ',' << format_f64(throughput_median) << ',' << format_f64(throughput_stddev) << ','
+      << bytes << ',' /* live_bytes placeholder */ << ',' << estimate << ',' << exact << ','
       << rel_error;
   return out.str();
 }
 
 using Clock = std::chrono::steady_clock;
 
-double elapsed_secs(Clock::time_point start) {
-  return std::chrono::duration<double>(Clock::now() - start).count();
+// Black-box sink: force the compiler to treat `value` as observed so the build
+// of the sketch inside the timed lambda cannot be optimised away. Mirrors the
+// role of core::hint::black_box in the Rust runners.
+template <typename T>
+void do_not_optimize(const T& value) {
+  asm volatile("" : : "g"(value) : "memory");
+}
+
+// Median of a vector (sorts in place). Returns 0 for an empty vector.
+double median(std::vector<double>& xs) {
+  if (xs.empty()) {
+    return 0.0;
+  }
+  std::sort(xs.begin(), xs.end());
+  const size_t n = xs.size();
+  if (n % 2 == 1) {
+    return xs[n / 2];
+  }
+  return (xs[n / 2 - 1] + xs[n / 2]) / 2.0;
+}
+
+// Population standard deviation (divides by n). Returns 0 for an empty vector.
+double population_stddev(const std::vector<double>& xs) {
+  if (xs.empty()) {
+    return 0.0;
+  }
+  double sum = 0.0;
+  for (double x : xs) {
+    sum += x;
+  }
+  const double mean = sum / static_cast<double>(xs.size());
+  double var = 0.0;
+  for (double x : xs) {
+    const double d = x - mean;
+    var += d * d;
+  }
+  var /= static_cast<double>(xs.size());
+  return std::sqrt(var);
+}
+
+// Run `body` once untimed (if warmup), then `reps` timed reps. Each rep is
+// assumed to perform `ops_per_rep` operations. Returns {median, stddev} ops/s,
+// matching the runner-ours timing helper semantics exactly.
+std::pair<double, double> timed_throughput(int reps, bool warmup, uint64_t ops_per_rep,
+                                           const std::function<void()>& body) {
+  if (warmup) {
+    body();
+  }
+  std::vector<double> rates;
+  rates.reserve(static_cast<size_t>(reps));
+  for (int i = 0; i < reps; ++i) {
+    const auto start = Clock::now();
+    body();
+    const double secs = std::chrono::duration<double>(Clock::now() - start).count();
+    rates.push_back(secs > 0.0 ? static_cast<double>(ops_per_rep) / secs : 0.0);
+  }
+  const double stddev = population_stddev(rates);
+  return {median(rates), stddev};
 }
 
 // HLL distinct-count row. T is the item type fed to the sketch.
 template <typename T>
-std::string hll_row(const std::string& dataset, const std::vector<T>& items, double exact) {
+std::string hll_row(const std::string& dataset, const std::vector<T>& items, double exact,
+                    int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
+  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+    datasketches::hll_sketch sketch(HLL_LG_K, datasketches::HLL_8);
+    for (const T& item : items) {
+      sketch.update(item);
+    }
+    do_not_optimize(sketch.get_estimate());
+  });
+  // Build one more populated sketch outside the timing loop to read the row's
+  // estimate and serialised size.
   datasketches::hll_sketch sketch(HLL_LG_K, datasketches::HLL_8);
-  const auto start = Clock::now();
   for (const T& item : items) {
     sketch.update(item);
   }
-  const double secs = elapsed_secs(start);
   const double estimate = sketch.get_estimate();
   const double rel_error = std::abs(estimate - exact) / exact;
   const uint32_t bytes = sketch.get_compact_serialization_bytes();
-  return row("hll", dataset, "distinct_count", n, throughput(n, secs),
+  return row("hll", dataset, "distinct_count", n, reps, tput.first, tput.second,
              std::to_string(bytes), format_f64(estimate), format_f64(exact),
              format_f64(rel_error));
 }
 
 // CPC distinct-count row. T is the item type fed to the sketch.
 template <typename T>
-std::string cpc_row(const std::string& dataset, const std::vector<T>& items, double exact) {
+std::string cpc_row(const std::string& dataset, const std::vector<T>& items, double exact,
+                    int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
+  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+    datasketches::cpc_sketch sketch(CPC_LG_K);
+    for (const T& item : items) {
+      sketch.update(item);
+    }
+    do_not_optimize(sketch.get_estimate());
+  });
   datasketches::cpc_sketch sketch(CPC_LG_K);
-  const auto start = Clock::now();
   for (const T& item : items) {
     sketch.update(item);
   }
-  const double secs = elapsed_secs(start);
   const double estimate = sketch.get_estimate();
   const double rel_error = std::abs(estimate - exact) / exact;
   const size_t bytes = sketch.serialize().size();
-  return row("cpc", dataset, "distinct_count", n, throughput(n, secs),
+  return row("cpc", dataset, "distinct_count", n, reps, tput.first, tput.second,
              std::to_string(bytes), format_f64(estimate), format_f64(exact),
              format_f64(rel_error));
 }
 
 // Theta distinct-count row.
 template <typename T>
-std::string theta_row(const std::string& dataset, const std::vector<T>& items, double exact) {
+std::string theta_row(const std::string& dataset, const std::vector<T>& items, double exact,
+                      int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
+  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+    auto sketch = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
+    for (const T& item : items) {
+      sketch.update(item);
+    }
+    do_not_optimize(sketch.get_estimate());
+  });
   auto sketch = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
-  const auto start = Clock::now();
   for (const T& item : items) {
     sketch.update(item);
   }
-  const double secs = elapsed_secs(start);
   const double estimate = sketch.get_estimate();
   const double rel_error = std::abs(estimate - exact) / exact;
   // Bytes is the serialized size of the compact form, the comparable
   // persisted footprint of the sketch.
   const datasketches::compact_theta_sketch compact = sketch.compact();
   const size_t bytes = compact.get_serialized_size_bytes();
-  return row("theta", dataset, "distinct_count", n, throughput(n, secs),
+  return row("theta", dataset, "distinct_count", n, reps, tput.first, tput.second,
              std::to_string(bytes), format_f64(estimate), format_f64(exact),
              format_f64(rel_error));
 }
@@ -143,42 +224,56 @@ std::string theta_row(const std::string& dataset, const std::vector<T>& items, d
 // Bloom build row. A membership filter has no cardinality estimate, so the
 // estimate/exact/rel_error fields are left empty.
 template <typename T>
-std::string bloom_row(const std::string& dataset, const std::vector<T>& items) {
+std::string bloom_row(const std::string& dataset, const std::vector<T>& items, int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
   // Size the filter for n distinct items at the target false positive rate.
   const uint64_t max_items = n > 0 ? n : 1;
+  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+    datasketches::bloom_filter filter =
+        datasketches::bloom_filter::builder::create_by_accuracy(max_items, BLOOM_TARGET_FPP);
+    for (const T& item : items) {
+      filter.update(item);
+    }
+    do_not_optimize(filter.get_bits_used());
+  });
   datasketches::bloom_filter filter =
       datasketches::bloom_filter::builder::create_by_accuracy(max_items, BLOOM_TARGET_FPP);
-  const auto start = Clock::now();
   for (const T& item : items) {
     filter.update(item);
   }
-  const double secs = elapsed_secs(start);
   const size_t bytes = filter.get_serialized_size_bytes();
-  return row("bloom", dataset, "build", n, throughput(n, secs), std::to_string(bytes), "",
-             "", "");
+  return row("bloom", dataset, "build", n, reps, tput.first, tput.second, std::to_string(bytes),
+             "", "", "");
 }
 
 // Count-Min point-query row. Each item is incremented once, then a designated
 // hot key is incremented HOT_KEY_COUNT times; the query is for that key.
 template <typename T>
-std::string countmin_row(const std::string& dataset, const std::vector<T>& items) {
+std::string countmin_row(const std::string& dataset, const std::vector<T>& items, int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
+  const uint64_t total_ops = n + HOT_KEY_COUNT;
+  const std::pair<double, double> tput = timed_throughput(reps, true, total_ops, [&] {
+    datasketches::count_min_sketch<uint64_t> sketch(COUNTMIN_NUM_HASHES, COUNTMIN_NUM_BUCKETS);
+    for (const T& item : items) {
+      sketch.update(item, 1);
+    }
+    for (uint64_t i = 0; i < HOT_KEY_COUNT; ++i) {
+      sketch.update(HOT_KEY, 1);
+    }
+    do_not_optimize(sketch.get_estimate(HOT_KEY));
+  });
   datasketches::count_min_sketch<uint64_t> sketch(COUNTMIN_NUM_HASHES, COUNTMIN_NUM_BUCKETS);
-  const auto start = Clock::now();
   for (const T& item : items) {
     sketch.update(item, 1);
   }
   for (uint64_t i = 0; i < HOT_KEY_COUNT; ++i) {
     sketch.update(HOT_KEY, 1);
   }
-  const double secs = elapsed_secs(start);
   const double estimate = static_cast<double>(sketch.get_estimate(HOT_KEY));
   const double exact = static_cast<double>(HOT_KEY_COUNT);
   const double rel_error = std::abs(estimate - exact) / exact;
   const size_t bytes = sketch.get_serialized_size_bytes();
-  const uint64_t total_ops = n + HOT_KEY_COUNT;
-  return row("countmin", dataset, "point_query", total_ops, throughput(total_ops, secs),
+  return row("countmin", dataset, "point_query", total_ops, reps, tput.first, tput.second,
              std::to_string(bytes), format_f64(estimate), format_f64(exact),
              format_f64(rel_error));
 }
@@ -350,7 +445,8 @@ std::string dataset_label(const std::string& path) {
 }
 
 void print_usage() {
-  std::cerr << "usage: runner_cpp --n <N> [--tpch <csv_path> --col <COL>] --out <results.csv>"
+  std::cerr << "usage: runner_cpp --n <N> [--reps <R>] [--tpch <csv_path> --col <COL>] "
+               "--out <results.csv>"
             << std::endl;
   std::cerr << "       runner_cpp --trials <T> --n <N> --out <results.csv>" << std::endl;
 }
@@ -360,6 +456,7 @@ void print_usage() {
 int main(int argc, char** argv) {
   uint64_t n = 0;
   bool have_n = false;
+  int reps = DEFAULT_REPS;
   std::string tpch_path;
   bool have_tpch = false;
   size_t col = 0;
@@ -374,6 +471,8 @@ int main(int argc, char** argv) {
     if (arg == "--n" && i + 1 < argc) {
       n = std::strtoull(argv[++i], nullptr, 10);
       have_n = true;
+    } else if (arg == "--reps" && i + 1 < argc) {
+      reps = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
     } else if (arg == "--trials" && i + 1 < argc) {
       trials = std::strtoull(argv[++i], nullptr, 10);
       have_trials = true;
@@ -399,6 +498,11 @@ int main(int argc, char** argv) {
   }
   if (have_tpch != have_col) {
     std::cerr << "runner_cpp: --tpch and --col must be supplied together" << std::endl;
+    print_usage();
+    return 1;
+  }
+  if (reps <= 0) {
+    std::cerr << "runner_cpp: --reps must be a positive integer" << std::endl;
     print_usage();
     return 1;
   }
@@ -447,11 +551,11 @@ int main(int argc, char** argv) {
       distinct.insert(i);
     }
     const double exact = static_cast<double>(distinct.size());
-    lines.push_back(hll_row("synthetic", synthetic, exact));
-    lines.push_back(cpc_row("synthetic", synthetic, exact));
-    lines.push_back(theta_row("synthetic", synthetic, exact));
-    lines.push_back(bloom_row("synthetic", synthetic));
-    lines.push_back(countmin_row("synthetic", synthetic));
+    lines.push_back(hll_row("synthetic", synthetic, exact, reps));
+    lines.push_back(cpc_row("synthetic", synthetic, exact, reps));
+    lines.push_back(theta_row("synthetic", synthetic, exact, reps));
+    lines.push_back(bloom_row("synthetic", synthetic, reps));
+    lines.push_back(countmin_row("synthetic", synthetic, reps));
   }
 
   // TPC-H column dataset, if requested.
@@ -463,11 +567,11 @@ int main(int argc, char** argv) {
     std::unordered_set<std::string> distinct(values.begin(), values.end());
     const double exact = static_cast<double>(distinct.size());
     const std::string dataset = dataset_label(tpch_path);
-    lines.push_back(hll_row(dataset, values, exact));
-    lines.push_back(cpc_row(dataset, values, exact));
-    lines.push_back(theta_row(dataset, values, exact));
-    lines.push_back(bloom_row(dataset, values));
-    lines.push_back(countmin_row(dataset, values));
+    lines.push_back(hll_row(dataset, values, exact, reps));
+    lines.push_back(cpc_row(dataset, values, exact, reps));
+    lines.push_back(theta_row(dataset, values, exact, reps));
+    lines.push_back(bloom_row(dataset, values, reps));
+    lines.push_back(countmin_row(dataset, values, reps));
   }
 
   std::ofstream out(out_path);

@@ -5,18 +5,23 @@
 //! so that the reporter can join the two implementations row-for-row:
 //!
 //! ```text
-//! implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error
+//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
 //! ```
 //!
 //! The `implementation` field is always `apache-rust` here. Only the four
 //! sketches that both libraries provide are emitted (`hll`, `theta`, `bloom`,
 //! `countmin`); the Apache Rust crate has no KLL, so no `kll` row is produced.
 //!
+//! Throughput follows the shared warmup+reps protocol (see [`timing`]): one
+//! untimed warmup pass, then `reps` timed reps rebuilding a fresh sketch each
+//! rep, reporting the median and population stddev of per-rep throughput.
+//!
 //! `run` produces the synthetic-dataset rows; `run_tpch` produces the rows for
 //! a single TPC-H column.
 
 use std::path::Path;
-use std::time::Instant;
+
+pub mod timing;
 
 use datasets::{exact_distinct, synthetic_distinct, tpch_column};
 use datasketches::bloom::BloomFilterBuilder;
@@ -26,8 +31,7 @@ use datasketches::hll::{HllSketch, HllType};
 use datasketches::theta::ThetaSketch;
 
 /// The exact CSV header line shared by all runners.
-pub const HEADER: &str =
-    "implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,estimate,exact,rel_error";
+pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error";
 
 const IMPLEMENTATION: &str = "apache-rust";
 const HOT_KEY: &str = "__hot__";
@@ -43,27 +47,23 @@ fn row(
     dataset: &str,
     op: &str,
     n: u64,
-    throughput: f64,
+    reps: u64,
+    throughput_median: f64,
+    throughput_stddev: f64,
     bytes: Option<usize>,
+    live_bytes: Option<usize>,
     estimate: Option<f64>,
     exact: Option<f64>,
     rel_error: Option<f64>,
 ) -> String {
     let bytes = bytes.map(|b| b.to_string()).unwrap_or_default();
+    let live_bytes = live_bytes.map(|b| b.to_string()).unwrap_or_default();
     let estimate = estimate.map(|v| format!("{v:.6}")).unwrap_or_default();
     let exact = exact.map(|v| format!("{v:.6}")).unwrap_or_default();
     let rel_error = rel_error.map(|v| format!("{v:.6}")).unwrap_or_default();
     format!(
-        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{throughput:.6},{bytes},{estimate},{exact},{rel_error}"
+        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
     )
-}
-
-fn throughput(items: u64, elapsed_secs: f64) -> f64 {
-    if elapsed_secs > 0.0 {
-        items as f64 / elapsed_secs
-    } else {
-        0.0
-    }
 }
 
 /// A stream item that the Apache sketch `update`/`insert` methods can consume
@@ -76,25 +76,36 @@ impl<T: std::hash::Hash + Clone> Item for T {}
 /// Uses `lg_config_k = 12` (matching our `HllSketch::new(12)`) and the `Hll8`
 /// target type, which is the fastest-update variant and the one the upstream
 /// estimation tests exercise by default.
-fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
+fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = HllSketch::new(12, HllType::Hll8);
+        for item in items {
+            // Apache `update<T: Hash>(value: T)` takes the value by value.
+            sketch.update(item.clone());
+        }
+        std::hint::black_box(&sketch);
+    });
+    // Build one more populated sketch outside the timing loop to read the row's
+    // estimate and serialised size.
     let mut sketch = HllSketch::new(12, HllType::Hll8);
-    let start = Instant::now();
     for item in items {
-        // Apache `update<T: Hash>(value: T)` takes the value by value.
         sketch.update(item.clone());
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
+    // `live_bytes` is filled by Task 14.
     row(
         "hll",
         dataset,
         "distinct_count",
         n,
-        throughput(n, elapsed),
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -106,24 +117,33 @@ fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
 /// Uses `lg_k = 12` (matching our `CpcSketch::new(12)`). The Apache
 /// `update<T: Hash>(value: T)` takes the value by value; bytes is the
 /// serialized length.
-fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
+fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = CpcSketch::new(12);
+        for item in items {
+            sketch.update(item.clone());
+        }
+        std::hint::black_box(&sketch);
+    });
     let mut sketch = CpcSketch::new(12);
-    let start = Instant::now();
     for item in items {
         sketch.update(item.clone());
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
+    // `live_bytes` is filled by Task 14.
     row(
         "cpc",
         dataset,
         "distinct_count",
         n,
-        throughput(n, elapsed),
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -135,24 +155,33 @@ fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
 /// Uses `lg_k = 12` (nominal k = 4096, matching our `ThetaSketch::new(4096)`).
 /// Theta's serialized form lives on the compact sketch, so bytes is taken from
 /// `compact(true).serialize()`.
-fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
+fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut sketch = ThetaSketch::builder().lg_k(12).build();
+        for item in items {
+            sketch.update(item.clone());
+        }
+        std::hint::black_box(&sketch);
+    });
     let mut sketch = ThetaSketch::builder().lg_k(12).build();
-    let start = Instant::now();
     for item in items {
         sketch.update(item.clone());
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate();
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.compact(true).serialize().len();
+    // `live_bytes` is filled by Task 14.
     row(
         "theta",
         dataset,
         "distinct_count",
         n,
-        throughput(n, elapsed),
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -163,23 +192,32 @@ fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64) -> String {
 /// estimate/exact/rel_error fields are left empty. The filter is sized for `n`
 /// items at a 1% false-positive probability via the accuracy builder, matching
 /// our `BloomFilter::new(n, 0.01, false)`. Bytes is the serialized length.
-fn bloom_row<T: Item>(dataset: &str, items: &[T]) -> String {
+fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
+    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+        let mut filter = BloomFilterBuilder::with_accuracy(n.max(1), 0.01).build();
+        for item in items {
+            // Apache `insert<T: Hash>(item: T)` takes the value by value.
+            filter.insert(item.clone());
+        }
+        std::hint::black_box(&filter);
+    });
     let mut filter = BloomFilterBuilder::with_accuracy(n.max(1), 0.01).build();
-    let start = Instant::now();
     for item in items {
-        // Apache `insert<T: Hash>(item: T)` takes the value by value.
         filter.insert(item.clone());
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let bytes = filter.serialize().len();
+    // `live_bytes` is filled by Task 14.
     row(
         "bloom",
         dataset,
         "build",
         n,
-        throughput(n, elapsed),
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
+        None,
         None,
         None,
         None,
@@ -192,29 +230,41 @@ fn bloom_row<T: Item>(dataset: &str, items: &[T]) -> String {
 /// Configured with `num_hashes = 5`, `num_buckets = 2048` to match our
 /// `CountMinSketch::new(2048, 5, ...)`. The value type is `u64` so the estimate
 /// is a non-negative frequency. Bytes is the serialized length.
-fn countmin_row<T: Item>(dataset: &str, items: &[T]) -> String {
+fn countmin_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
+    let total_ops = n + HOT_KEY_COUNT;
+    let (median, stddev) = timing::timed_throughput(reps, true, total_ops, || {
+        let mut sketch = CountMinSketch::<u64>::new(5, 2048);
+        for item in items {
+            sketch.update(item.clone());
+        }
+        for _ in 0..HOT_KEY_COUNT {
+            sketch.update(HOT_KEY);
+        }
+        std::hint::black_box(&sketch);
+    });
     let mut sketch = CountMinSketch::<u64>::new(5, 2048);
-    let start = Instant::now();
     for item in items {
         sketch.update(item.clone());
     }
     for _ in 0..HOT_KEY_COUNT {
         sketch.update(HOT_KEY);
     }
-    let elapsed = start.elapsed().as_secs_f64();
     let estimate = sketch.estimate(HOT_KEY) as f64;
     let exact = HOT_KEY_COUNT as f64;
     let rel_error = (estimate - exact).abs() / exact;
     let bytes = sketch.serialize().len();
-    let total_ops = n + HOT_KEY_COUNT;
+    // `live_bytes` is filled by Task 14.
     row(
         "countmin",
         dataset,
         "point_query",
         total_ops,
-        throughput(total_ops, elapsed),
+        reps as u64,
+        median,
+        stddev,
         Some(bytes),
+        None,
         Some(estimate),
         Some(exact),
         Some(rel_error),
@@ -279,17 +329,17 @@ pub fn run_rmse(trials: u64, n: u64) -> Vec<String> {
 }
 
 /// Produce all CSV lines for the synthetic dataset (header first).
-pub fn run(n: u64) -> Vec<String> {
+pub fn run(n: u64, reps: usize) -> Vec<String> {
     let synthetic: Vec<u64> = synthetic_distinct(n).collect();
     let exact = n as f64;
 
     vec![
         HEADER.to_string(),
-        hll_row("synthetic", &synthetic, exact),
-        cpc_row("synthetic", &synthetic, exact),
-        theta_row("synthetic", &synthetic, exact),
-        bloom_row("synthetic", &synthetic),
-        countmin_row("synthetic", &synthetic),
+        hll_row("synthetic", &synthetic, exact, reps),
+        cpc_row("synthetic", &synthetic, exact, reps),
+        theta_row("synthetic", &synthetic, exact, reps),
+        bloom_row("synthetic", &synthetic, reps),
+        countmin_row("synthetic", &synthetic, reps),
     ]
 }
 
@@ -301,6 +351,7 @@ pub fn run_tpch(
     path: &Path,
     col: usize,
     dataset: &str,
+    reps: usize,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let values = tpch_column(path, col).map_err(Box::new)?;
     let exact = exact_distinct(values.iter().cloned()) as f64;
@@ -310,10 +361,10 @@ pub fn run_tpch(
     let refs: Vec<&str> = values.iter().map(|s| s.as_str()).collect();
 
     Ok(vec![
-        hll_row(dataset, &refs, exact),
-        cpc_row(dataset, &refs, exact),
-        theta_row(dataset, &refs, exact),
-        bloom_row(dataset, &refs),
-        countmin_row(dataset, &refs),
+        hll_row(dataset, &refs, exact, reps),
+        cpc_row(dataset, &refs, exact, reps),
+        theta_row(dataset, &refs, exact, reps),
+        bloom_row(dataset, &refs, reps),
+        countmin_row(dataset, &refs, reps),
     ])
 }
