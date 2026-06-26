@@ -749,7 +749,7 @@ impl Serializable for KllSketch<f64> {
         // Items at level h represent 2^h original items, so we insert them
         // into level 0 and let the sketch re-compact naturally.
         //
-        // However, for faithful reconstruction, we replay items into a fresh
+        // However, for exact reconstruction, we replay items into a fresh
         // sketch from level 0 upward. Since we cannot directly set internal
         // levels, we use the update() method and accept that the compaction
         // structure may differ slightly. The min, max, and total_count will

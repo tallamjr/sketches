@@ -20,35 +20,47 @@
 //! - Heule, Nunkesser, Hall. "HyperLogLog in Practice: Algorithmic Engineering of a
 //!   State of the Art Cardinality Estimation Algorithm." EDBT, 2013.
 
+use core::marker::PhantomData;
 use std::collections::BTreeMap;
 
 use crate::hash::xxh3::Xxh3Hasher;
-use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
+use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
 
 /// HyperLogLog Sketch for approximate distinct counting.
+///
+/// Generic over the hashing backend `H`. The HIP estimator state and
+/// serialisation are hasher-independent; only the bytes fed into the hash
+/// function change with `H`.
 #[derive(Debug)]
-pub struct HllSketch {
+pub struct HllSketchGeneric<H: SketchHasher> {
     p: u8,
     m: usize,
     registers: Vec<u8>,
     hip: HipEstimator,
+    /// Zero-size marker binding the hasher type. The hasher itself is
+    /// `Default`, so no runtime state is carried.
+    _hasher: PhantomData<H>,
 }
 
-impl HllSketch {
+/// HLL sketch using the crate default xxh3 hasher.
+pub type HllSketch = HllSketchGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> HllSketchGeneric<H> {
     /// Create a new HLL sketch with precision p (number of register index bits).
     pub fn new(p: u8) -> Self {
         let m = 1 << p;
-        HllSketch {
+        HllSketchGeneric {
             p,
             m,
             registers: vec![0; m],
             hip: HipEstimator::new(m),
+            _hasher: PhantomData,
         }
     }
 
     /// Update the sketch with an item implementing Hashable.
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
-        let hash = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let hash = hash64_of(&H::default(), item, DEFAULT_SEED);
         let idx = (hash >> (64 - self.p)) as usize;
         let w = hash << self.p;
         let leading = w.leading_zeros().saturating_add(1);
@@ -105,7 +117,7 @@ impl HllSketch {
     }
 
     /// Merge another sketch into this one (in-place union).
-    pub fn merge(&mut self, other: &HllSketch) {
+    pub fn merge(&mut self, other: &Self) {
         if self.p != other.p {
             panic!(
                 "Cannot merge HLL sketches with different precision: {} vs {}",
@@ -154,17 +166,18 @@ impl HllSketch {
         assert_eq!(registers.len(), m, "Register count must equal 2^p");
         let mut hip = HipEstimator::new(m);
         hip.mark_out_of_order();
-        HllSketch {
+        HllSketchGeneric {
             p,
             m,
             registers,
             hip,
+            _hasher: PhantomData,
         }
     }
 
     /// Create an HllSketch from raw register bytes plus restored HIP state.
     ///
-    /// Used by deserialisation to faithfully reconstruct the in-order HIP
+    /// Used by deserialisation to reconstruct the in-order HIP
     /// estimate persisted alongside the registers.
     pub(crate) fn from_registers_with_hip(
         p: u8,
@@ -176,11 +189,12 @@ impl HllSketch {
     ) -> Self {
         let m = 1 << p;
         assert_eq!(registers.len(), m, "Register count must equal 2^p");
-        HllSketch {
+        HllSketchGeneric {
             p,
             m,
             registers,
             hip: HipEstimator::from_raw(hip_accum, kxq0, kxq1, out_of_order),
+            _hasher: PhantomData,
         }
     }
 
@@ -1285,11 +1299,21 @@ impl HllUnion {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveHllPlusPlus, HllPlusPlusSketch, HllPlusPlusSparseSketch, HllSketch, HllSketchMode,
-        HllUnion, coupon_slot, coupon_value, make_coupon,
+        AdaptiveHllPlusPlus, HllPlusPlusSketch, HllPlusPlusSparseSketch, HllSketch,
+        HllSketchGeneric, HllSketchMode, HllUnion, coupon_slot, coupon_value, make_coupon,
     };
 
     // ---- Existing tests (kept intact) ----
+
+    #[test]
+    fn murmur3_hll_counts() {
+        use crate::hash::murmur3::Murmur3Hasher;
+        let mut s = HllSketchGeneric::<Murmur3Hasher>::new(12);
+        for i in 0u64..50_000 {
+            s.update(&i);
+        }
+        assert!((s.estimate() - 50_000.0).abs() / 50_000.0 < 0.05);
+    }
 
     #[test]
     fn estimate_empty() {

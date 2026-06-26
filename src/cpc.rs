@@ -10,7 +10,7 @@
 //! Cardinality Estimation Algorithm" (2017), <https://arxiv.org/abs/1708.06839>.
 //!
 //! The core update path, flavour machinery, sliding window, surprising-value
-//! `PairTable`, and HIP/kxp accumulation are ported faithfully from the Apache
+//! `PairTable`, and HIP/kxp accumulation are ported from the Apache
 //! DataSketches Rust reference (`cpc/{sketch.rs,mod.rs,pair_table.rs}`). The
 //! only adaptation is the coupon derivation, which uses this crate's xxh3
 //! 128-bit hash split into two 64-bit halves in place of the reference's
@@ -28,7 +28,8 @@ use crate::codec::{CodecError, Family, SketchHeader, SketchReader, SketchWriter}
 use crate::cpc_compression::CompressedState;
 use crate::cpc_tables::{INVERSE_POWERS_OF_2, KXP_BYTE_TABLE};
 use crate::hash::xxh3::Xxh3Hasher;
-use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
+use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash128_of};
+use core::marker::PhantomData;
 
 /// Default log2 of K.
 const DEFAULT_LG_K: u8 = 11;
@@ -108,7 +109,7 @@ const DOWNSIZE_DENOMINATOR: u32 = 4;
 /// A highly specialised hash table used for sparse data.
 ///
 /// Stores `(row, col)` pairs packed as `row_col = (row << 6) | col` and uses
-/// linear probing for collision resolution. Ported faithfully from
+/// linear probing for collision resolution. Ported from
 /// `cpc/pair_table.rs`.
 #[derive(Debug, Clone)]
 pub(crate) struct PairTable {
@@ -297,7 +298,7 @@ impl PairTable {
 /// to HLL. It automatically transitions through five flavour states as
 /// cardinality grows, optimising compression at each stage.
 #[derive(Debug, Clone)]
-pub struct CpcSketch {
+pub struct CpcSketchGeneric<H: SketchHasher> {
     // immutable config
     lg_k: u8,
 
@@ -323,15 +324,22 @@ pub struct CpcSketch {
     kxp: f64,
     /// The accumulated HIP cardinality estimate.
     hip_est_accum: f64,
+
+    /// Zero-size marker binding the hasher type. The hasher itself is
+    /// `Default`, so no runtime state is carried.
+    _hasher: PhantomData<H>,
 }
 
-impl Default for CpcSketch {
+/// CPC sketch using the crate default xxh3 hasher.
+pub type CpcSketch = CpcSketchGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> Default for CpcSketchGeneric<H> {
     fn default() -> Self {
         Self::new(DEFAULT_LG_K)
     }
 }
 
-impl CpcSketch {
+impl<H: SketchHasher> CpcSketchGeneric<H> {
     /// Default lg_k value.
     pub const DEFAULT_LG_K: u8 = DEFAULT_LG_K;
     /// Minimum allowed lg_k.
@@ -352,7 +360,7 @@ impl CpcSketch {
             "lg_k out of range; got {lg_k}",
         );
 
-        CpcSketch {
+        CpcSketchGeneric {
             lg_k,
             first_interesting_column: 0,
             num_coupons: 0,
@@ -362,6 +370,7 @@ impl CpcSketch {
             merge_flag: false,
             kxp: (1u64 << lg_k) as f64,
             hip_est_accum: 0.0,
+            _hasher: PhantomData,
         }
     }
 
@@ -373,7 +382,7 @@ impl CpcSketch {
     /// 64-bit hash outputs (sketch.rs:182-189), which is essential for the
     /// HIP/ICON estimator's distributional assumptions to hold.
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
-        let h = hash128_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let h = hash128_of(&H::default(), item, DEFAULT_SEED);
         let h1 = h as u64; // low 64 bits  -> row
         let h2 = (h >> 64) as u64; // high 64 bits -> column via leading zeros
 
@@ -707,8 +716,8 @@ impl CpcSketch {
         hip_est_accum: f64,
         table: Option<PairTable>,
         window: Vec<u8>,
-    ) -> CpcSketch {
-        CpcSketch {
+    ) -> CpcSketchGeneric<H> {
+        CpcSketchGeneric {
             lg_k,
             first_interesting_column,
             num_coupons,
@@ -718,6 +727,7 @@ impl CpcSketch {
             merge_flag,
             kxp,
             hip_est_accum,
+            _hasher: PhantomData,
         }
     }
 
@@ -746,8 +756,8 @@ impl CpcSketch {
     /// into a fresh union accumulator and the reduced result replaces `self`.
     /// The result carries `merge_flag = true`, so [`estimate`](Self::estimate)
     /// uses the ICON estimator (HIP is invalid after a merge).
-    pub fn merge(&mut self, other: &CpcSketch) {
-        let mut union = CpcUnion::new(self.lg_k);
+    pub fn merge(&mut self, other: &CpcSketchGeneric<H>) {
+        let mut union = CpcUnionGeneric::<H>::new(self.lg_k);
         union.update(self);
         union.update(other);
         *self = union.to_sketch();
@@ -840,7 +850,7 @@ impl CpcSketch {
         };
 
         let un = compressed.uncompress(lg_k, num_coupons);
-        Ok(CpcSketch::from_uncompressed(
+        Ok(CpcSketchGeneric::from_uncompressed(
             lg_k,
             num_coupons,
             first_interesting_column,
@@ -862,33 +872,36 @@ impl CpcSketch {
 /// The bit matrix is mathematically a sketch but does not maintain any of the
 /// "extra" fields of our sketch objects.
 #[derive(Debug, Clone)]
-enum UnionState {
-    Accumulator(CpcSketch),
+enum UnionState<H: SketchHasher> {
+    Accumulator(CpcSketchGeneric<H>),
     BitMatrix(Vec<u64>),
 }
 
 /// CPC Union (merge) operation for combining multiple CPC sketches.
 ///
-/// Faithfully ported from the Apache DataSketches Rust reference
+/// Ported from the Apache DataSketches Rust reference
 /// (`cpc/union.rs`). The accumulating union ORs the window and surprising-value
 /// table of each source sketch into a bit matrix, downsampling lg_k where a
 /// source has a smaller lg_k, and reduces the matrix back to a sketch with
 /// `merge_flag = true` so [`estimate`](Self::estimate) uses ICON.
 #[derive(Debug, Clone)]
-pub struct CpcUnion {
+pub struct CpcUnionGeneric<H: SketchHasher> {
     /// Immutable target lg_k. Due to merging with sources of lower lg_k, this
     /// can be reduced below the configured value.
     lg_k: u8,
-    state: UnionState,
+    state: UnionState<H>,
 }
 
-impl Default for CpcUnion {
+/// CPC union using the crate default xxh3 hasher.
+pub type CpcUnion = CpcUnionGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> Default for CpcUnionGeneric<H> {
     fn default() -> Self {
         Self::new(DEFAULT_LG_K)
     }
 }
 
-impl CpcUnion {
+impl<H: SketchHasher> CpcUnionGeneric<H> {
     /// Create a new CPC union with the given lg_k.
     ///
     /// # Panics
@@ -896,8 +909,8 @@ impl CpcUnion {
     /// Panics if `lg_k` is not in the range `[4, 26]`.
     pub fn new(lg_k: u8) -> Self {
         // We begin with the accumulator holding an empty merged sketch object.
-        let sketch = CpcSketch::new(lg_k);
-        CpcUnion {
+        let sketch = CpcSketchGeneric::<H>::new(lg_k);
+        CpcUnionGeneric {
             lg_k,
             state: UnionState::Accumulator(sketch),
         }
@@ -913,7 +926,7 @@ impl CpcUnion {
     }
 
     /// Add a sketch to the union.
-    pub fn update(&mut self, sketch: &CpcSketch) {
+    pub fn update(&mut self, sketch: &CpcSketchGeneric<H>) {
         let flavor = sketch.flavor();
         if flavor == Flavor::Empty {
             return;
@@ -1001,11 +1014,11 @@ impl CpcUnion {
             UnionState::Accumulator(sketch) => {
                 if sketch.is_empty() {
                     self.lg_k = new_lg_k;
-                    self.state = UnionState::Accumulator(CpcSketch::new(new_lg_k));
+                    self.state = UnionState::Accumulator(CpcSketchGeneric::<H>::new(new_lg_k));
                     return;
                 }
 
-                let mut new_sketch = CpcSketch::new(new_lg_k);
+                let mut new_sketch = CpcSketchGeneric::<H>::new(new_lg_k);
                 walk_table_updating_sketch(&mut new_sketch, sketch.surprising_value_table());
 
                 let final_new_flavor = new_sketch.flavor();
@@ -1038,11 +1051,11 @@ impl CpcUnion {
     /// reduced back to a sketch, recomputing `num_coupons` from the popcount and
     /// rebuilding the window, surprising-value table, offset, and
     /// first-interesting-column.
-    pub fn to_sketch(&self) -> CpcSketch {
+    pub fn to_sketch(&self) -> CpcSketchGeneric<H> {
         match &self.state {
             UnionState::Accumulator(sketch) => {
                 if sketch.is_empty() {
-                    CpcSketch::new(self.lg_k)
+                    CpcSketchGeneric::<H>::new(self.lg_k)
                 } else {
                     let mut sketch = sketch.clone();
                     assert_eq!(sketch.flavor(), Flavor::Sparse);
@@ -1053,7 +1066,7 @@ impl CpcUnion {
             UnionState::BitMatrix(matrix) => {
                 let lg_k = self.lg_k;
 
-                let mut sketch = CpcSketch::new(lg_k);
+                let mut sketch = CpcSketchGeneric::<H>::new(lg_k);
                 let num_coupons = count_bits_set_in_matrix(matrix);
                 sketch.num_coupons = num_coupons;
                 let offset = determine_correct_offset(lg_k, num_coupons);
@@ -1106,7 +1119,7 @@ impl CpcUnion {
     }
 
     /// Get the result sketch (alias of [`to_sketch`](Self::to_sketch)).
-    pub fn result(&self) -> CpcSketch {
+    pub fn result(&self) -> CpcSketchGeneric<H> {
         self.to_sketch()
     }
 
@@ -1175,7 +1188,10 @@ fn or_matrix_into_matrix(dst_matrix: &mut [u64], dst_lg_k: u8, src_matrix: &[u64
 /// Walk a source surprising-value table, updating the destination sketch via
 /// `row_col_update`. A golden-ratio stride over the table slots avoids the
 /// snowplow effect; row indices are masked to the destination lg_k.
-fn walk_table_updating_sketch(sketch: &mut CpcSketch, table: &PairTable) {
+fn walk_table_updating_sketch<H: SketchHasher>(
+    sketch: &mut CpcSketchGeneric<H>,
+    table: &PairTable,
+) {
     assert!(sketch.lg_k() <= 26);
 
     let slots = table.slots();
@@ -1284,6 +1300,27 @@ mod estimator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn murmur3_variant_constructs_and_counts() {
+        use crate::hash::murmur3::Murmur3Hasher;
+        let mut s = CpcSketchGeneric::<Murmur3Hasher>::new(12);
+        for i in 0u64..10_000 {
+            s.update(&i);
+        }
+        let est = s.estimate();
+        // within 5% of true cardinality 10_000
+        assert!((est - 10_000.0).abs() / 10_000.0 < 0.05, "est={est}");
+    }
+
+    #[test]
+    fn xxh3_alias_unchanged_estimate() {
+        let mut s = CpcSketch::new(12);
+        for i in 0u64..10_000 {
+            s.update(&i);
+        }
+        assert!((s.estimate() - 10_000.0).abs() / 10_000.0 < 0.05);
+    }
 
     #[test]
     fn icon_estimate_is_reasonable_and_monotonic() {

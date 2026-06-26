@@ -3,7 +3,7 @@
 use super::SketchHasher;
 use xxhash_rust::xxh3::{xxh3_64_with_seed, xxh3_128_with_seed};
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct Xxh3Hasher;
 
 impl SketchHasher for Xxh3Hasher {

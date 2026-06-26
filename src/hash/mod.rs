@@ -1,6 +1,7 @@
 //! Pluggable hashing for sketches. xxh3 is the default; the trait allows
 //! alternatives without leaking generics to ordinary callers.
 
+pub mod murmur3;
 pub mod xxh3;
 
 /// Default seed. Arbitrary fixed value for deterministic hashing across runs.

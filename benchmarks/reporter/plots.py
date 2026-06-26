@@ -33,10 +33,45 @@ _apply_tahoma()
 
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
+# Preferred left-to-right ordering for any implementation a CSV might carry.
+# `ours-murmur3` sits next to `ours` so the xxh3-vs-murmur3 hash effect reads at
+# a glance against `apache-rust`/`apache-cpp`; `apache` is the pip datasketches
+# label emitted by the Python plane. Implementations not listed here are kept in
+# first-seen order after these.
+IMPL_ORDER = [
+    "ours",
+    "ours-murmur3",
+    "apache-rust",
+    "apache-cpp",
+    "apache",
+]
+
+
+def _ordered_impls(rows):
+    """Implementations present in `rows`, in the preferred display order.
+
+    Every distinct ``implementation`` value in the data is rendered (so a plane
+    such as ``ours-murmur3`` or the Python ``apache`` plane is never silently
+    dropped). Known names follow IMPL_ORDER; unknown names follow in the order
+    they first appear.
+    """
+    present = []
+    seen = set()
+    for row in rows:
+        impl = row["implementation"]
+        if impl not in seen:
+            seen.add(impl)
+            present.append(impl)
+    ordered = [impl for impl in IMPL_ORDER if impl in seen]
+    ordered += [impl for impl in present if impl not in IMPL_ORDER]
+    return ordered
+
 
 def _as_float(value):
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        return float(value)
     value = value.strip()
     if value == "":
         return None
@@ -51,12 +86,21 @@ def _label(row):
     return f"{row['sketch']}\n{row['dataset']}/{row['op']}"
 
 
-def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
+def _grouped_bar(
+    rows, field, title, ylabel, out_path, require_field=False, yerr_field=None
+):
     """Render one grouped-bar chart (one bar per implementation per group).
 
     Groups are keyed by (sketch, dataset, op). When require_field is True only
     groups that have at least one non-empty value for `field` are plotted.
+
+    When `yerr_field` is provided, the per-bar value of that field is gathered
+    for each group and passed to ``ax.bar`` as ``yerr`` with a visible capsize,
+    drawing symmetric error bars. A missing or non-numeric stddev for a bar is
+    treated as zero error so a sketch without a stddev does not crash. When
+    `yerr_field` is None the function behaves exactly as before (no error bars).
     """
+    impls = _ordered_impls(rows)
     groups = {}
     order = []
     for row in rows:
@@ -67,34 +111,46 @@ def _grouped_bar(rows, field, title, ylabel, out_path, require_field=False):
         groups[key][row["implementation"]] = row
 
     labels = []
-    series = {impl: [] for impl in IMPLEMENTATIONS}
+    series = {impl: [] for impl in impls}
+    errors = {impl: [] for impl in impls}
     for key in order:
         impl_rows = groups[key]
         values = {}
-        for impl in IMPLEMENTATIONS:
+        errs = {}
+        for impl in impls:
             r = impl_rows.get(impl)
             values[impl] = _as_float(r[field]) if r else None
+            if yerr_field is not None and r is not None:
+                errs[impl] = _as_float(r.get(yerr_field))
+            else:
+                errs[impl] = None
         if require_field and all(v is None for v in values.values()):
             continue
         sample = next(iter(impl_rows.values()))
         labels.append(_label(sample))
-        for impl in IMPLEMENTATIONS:
+        for impl in impls:
             series[impl].append(values[impl])
+            errors[impl].append(errs[impl])
 
     fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
 
     n_groups = len(labels)
-    n_impls = len(IMPLEMENTATIONS)
+    n_impls = len(impls)
     bar_width = 0.8 / n_impls
     indices = list(range(n_groups))
 
     plotted_any = False
-    for offset, impl in enumerate(IMPLEMENTATIONS):
+    for offset, impl in enumerate(impls):
         heights = [v if v is not None else 0.0 for v in series[impl]]
         positions = [i + offset * bar_width for i in indices]
         if any(v is not None for v in series[impl]):
             plotted_any = True
-        ax.bar(positions, heights, bar_width, label=impl)
+        bar_kwargs = {"label": impl}
+        if yerr_field is not None:
+            # Missing/None stddev counts as zero error for that bar.
+            bar_kwargs["yerr"] = [e if e is not None else 0.0 for e in errors[impl]]
+            bar_kwargs["capsize"] = 3
+        ax.bar(positions, heights, bar_width, **bar_kwargs)
 
     centre = (n_impls - 1) * bar_width / 2.0
     ax.set_xticks([i + centre for i in indices])
@@ -214,18 +270,19 @@ def render_plots(rows, out_dir):
     written.append(
         _grouped_bar(
             rows,
-            field="throughput_ops_per_s",
+            field="throughput_median_ops_per_s",
             title="Throughput by sketch and implementation",
-            ylabel="throughput (ops/s)",
+            ylabel="throughput median (ops/s)",
             out_path=os.path.join(out_dir, "throughput.png"),
+            yerr_field="throughput_stddev",
         )
     )
     written.append(
         _grouped_bar(
             rows,
-            field="bytes",
-            title="Serialised size by sketch and implementation",
-            ylabel="bytes",
+            field="live_bytes",
+            title="Memory footprint by sketch and implementation",
+            ylabel="live bytes",
             out_path=os.path.join(out_dir, "memory.png"),
         )
     )

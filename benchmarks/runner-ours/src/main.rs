@@ -2,7 +2,7 @@
 //! in the shared CSV schema.
 //!
 //! Usage:
-//!   runner-ours --n <N> [--tpch <csv_path> --col <COL>] --out <results.csv>
+//!   runner-ours --n <N> [--reps <R>] [--tpch <csv_path> --col <COL>] --out <results.csv>
 //!   runner-ours --trials <T> --n <N> --out <rmse.csv>
 //!
 //! Without `--trials`, always runs the synthetic dataset; if `--tpch` is given,
@@ -19,8 +19,16 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+// The counting `#[global_allocator]` is declared in the library
+// (`runner_ours::counting_alloc`) so that both this binary and the crate's own
+// test build install it; the binary inherits it transitively.
+
+/// Default number of timed reps for the warmup+reps throughput protocol.
+const DEFAULT_REPS: usize = 30;
+
 struct Args {
     n: u64,
+    reps: usize,
     tpch: Option<PathBuf>,
     col: Option<usize>,
     out: PathBuf,
@@ -29,6 +37,7 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut n: Option<u64> = None;
+    let mut reps: Option<usize> = None;
     let mut tpch: Option<PathBuf> = None;
     let mut col: Option<usize> = None;
     let mut out: Option<PathBuf> = None;
@@ -40,6 +49,13 @@ fn parse_args() -> Result<Args, String> {
             "--n" => {
                 let v = args.next().ok_or("--n requires a value")?;
                 n = Some(v.parse().map_err(|_| format!("invalid --n value: {v}"))?);
+            }
+            "--reps" => {
+                let v = args.next().ok_or("--reps requires a value")?;
+                reps = Some(
+                    v.parse()
+                        .map_err(|_| format!("invalid --reps value: {v}"))?,
+                );
             }
             "--trials" => {
                 let v = args.next().ok_or("--trials requires a value")?;
@@ -65,6 +81,7 @@ fn parse_args() -> Result<Args, String> {
     }
 
     let n = n.ok_or("--n is required")?;
+    let reps = reps.unwrap_or(DEFAULT_REPS);
     let out = out.ok_or("--out is required")?;
     if tpch.is_some() != col.is_some() {
         return Err("--tpch and --col must be given together".to_string());
@@ -72,6 +89,7 @@ fn parse_args() -> Result<Args, String> {
 
     Ok(Args {
         n,
+        reps,
         tpch,
         col,
         out,
@@ -96,11 +114,11 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let mut lines = runner_ours::run(args.n);
+    let mut lines = runner_ours::run(args.n, args.reps);
 
     if let (Some(path), Some(col)) = (&args.tpch, args.col) {
         let label = dataset_label(path);
-        let tpch_lines = runner_ours::run_tpch(path, col, &label)
+        let tpch_lines = runner_ours::run_tpch(path, col, &label, args.reps)
             .map_err(|e| format!("failed to read TPC-H column from {path:?}: {e}"))?;
         lines.extend(tpch_lines);
     }

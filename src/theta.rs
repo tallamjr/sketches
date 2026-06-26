@@ -24,8 +24,10 @@
 //! - Dasgupta, Lang, Rhodes, Thaler. "A Framework for Estimating Stream Expression
 //!   Cardinalities." ICDE, 2016.
 
+use core::marker::PhantomData;
+
 use crate::hash::xxh3::Xxh3Hasher;
-use crate::hash::{DEFAULT_SEED, Hashable, hash128_of};
+use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash128_of};
 
 /// Maximum theta value representing the full hash space.
 const MAX_THETA: u64 = u64::MAX;
@@ -47,8 +49,12 @@ const STRIDE_MASK: u64 = (1 << STRIDE_HASH_BITS) - 1;
 /// Uses an open-addressing hash table with stride-based probing for O(1)
 /// amortised duplicate detection, replacing the previous BinaryHeap + linear
 /// scan approach.
+///
+/// Generic over the hashing backend `H`. The serialisation format is
+/// hasher-independent (it stores already-hashed values), so it is unchanged
+/// regardless of `H`.
 #[derive(Debug)]
-pub struct ThetaSketch {
+pub struct ThetaSketchGeneric<H: SketchHasher> {
     /// Nominal sample size (sketch capacity).
     pub k: usize,
     /// Log2 of the current table size.
@@ -61,9 +67,14 @@ pub struct ThetaSketch {
     num_entries: usize,
     /// Current theta threshold. Only hashes strictly less than theta are retained.
     theta: u64,
+    /// Zero-size marker binding the sketch to its hashing backend.
+    _hasher: PhantomData<H>,
 }
 
-impl ThetaSketch {
+/// Theta Sketch using the default xxh3 hashing backend.
+pub type ThetaSketch = ThetaSketchGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> ThetaSketchGeneric<H> {
     /// Create a new Theta sketch with sample size k.
     ///
     /// The value of k is rounded up to the next power of two internally.
@@ -74,19 +85,20 @@ impl ThetaSketch {
         // Start with table size = 2 * k so we have room before needing to rebuild.
         let lg_cur_size = lg_nom_size + 1;
         let table_size = 1usize << lg_cur_size;
-        ThetaSketch {
+        ThetaSketchGeneric {
             k: actual_k,
             lg_cur_size,
             lg_nom_size,
             entries: vec![0u64; table_size],
             num_entries: 0,
             theta: MAX_THETA,
+            _hasher: PhantomData,
         }
     }
 
     /// Update the sketch with an item implementing Hashable.
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T) {
-        let h = hash128_of(&Xxh3Hasher, item, DEFAULT_SEED);
+        let h = hash128_of(&H::default(), item, DEFAULT_SEED);
         let hash = (h >> 64) as u64; // top 64 bits as the uniform value
 
         // The hash value 0 is reserved as the empty sentinel.
@@ -253,7 +265,7 @@ impl ThetaSketch {
     }
 
     /// Build a ThetaSketch from a set of hash values, a theta, and a target k.
-    fn from_values(values: &[u64], theta: u64, k: usize) -> ThetaSketch {
+    fn from_values(values: &[u64], theta: u64, k: usize) -> Self {
         let lg_nom_size = log2_ceil(k);
         let actual_k = 1usize << lg_nom_size;
 
@@ -283,20 +295,25 @@ impl ThetaSketch {
             }
         }
 
-        ThetaSketch {
+        ThetaSketchGeneric {
             k: actual_k,
             lg_cur_size,
             lg_nom_size,
             entries,
             num_entries: count,
             theta,
+            _hasher: PhantomData,
         }
     }
 
     /// Union of multiple sketches, returning a new sketch with capacity k.
-    pub fn union_many(sketches: &[&ThetaSketch], k: usize) -> ThetaSketch {
+    ///
+    /// All operands share the same hasher `H`: combining sketches built with
+    /// different hash backends would mix incompatible hash spaces and is
+    /// disallowed by the type system.
+    pub fn union_many(sketches: &[&Self], k: usize) -> Self {
         if sketches.is_empty() {
-            return ThetaSketch::new(k);
+            return Self::new(k);
         }
 
         // The union theta is the minimum theta across all input sketches.
@@ -334,15 +351,15 @@ impl ThetaSketch {
     }
 
     /// Union of two sketches with the same capacity.
-    pub fn union(&self, other: &ThetaSketch) -> ThetaSketch {
-        ThetaSketch::union_many(&[self, other], self.k)
+    pub fn union(&self, other: &Self) -> Self {
+        Self::union_many(&[self, other], self.k)
     }
 
     /// Intersection of two sketches.
     ///
     /// The `intersect_many` name is kept for API compatibility. This performs a
     /// pairwise intersection of sketches `a` and `b`.
-    pub fn intersect_many(a: &ThetaSketch, b: &ThetaSketch, k: usize) -> ThetaSketch {
+    pub fn intersect_many(a: &Self, b: &Self, k: usize) -> Self {
         let result_theta = a.theta.min(b.theta);
 
         // Build a lookup set from the smaller sketch for O(1) membership testing.
@@ -378,13 +395,13 @@ impl ThetaSketch {
 
     /// Intersection of two sketches with the same capacity.
     /// Returns a new sketch containing elements present in both sketches.
-    pub fn intersect(&self, other: &ThetaSketch) -> ThetaSketch {
+    pub fn intersect(&self, other: &Self) -> Self {
         let result_k = self.k.min(other.k);
-        ThetaSketch::intersect_many(self, other, result_k)
+        Self::intersect_many(self, other, result_k)
     }
 
     /// Difference A \ B: items in A not in B.
-    pub fn difference(a: &ThetaSketch, b: &ThetaSketch, k: usize) -> ThetaSketch {
+    pub fn difference(a: &Self, b: &Self, k: usize) -> Self {
         let result_theta = a.theta.min(b.theta);
 
         let b_set = HashCollector::from_sketch(b);
@@ -556,7 +573,7 @@ impl HashCollector {
     }
 
     /// Build a collector from a sketch's retained values for membership testing.
-    fn from_sketch(sketch: &ThetaSketch) -> Self {
+    fn from_sketch<H: SketchHasher>(sketch: &ThetaSketchGeneric<H>) -> Self {
         let mut collector = Self::with_capacity(sketch.num_entries);
         for v in sketch.retained_values() {
             collector.insert(v);
@@ -1242,6 +1259,16 @@ mod tests {
             error_ratio < 0.10,
             "Self-intersect estimate {est} too far from {expected} (error {error_ratio})"
         );
+    }
+
+    #[test]
+    fn murmur3_theta_counts() {
+        use crate::hash::murmur3::Murmur3Hasher;
+        let mut s = ThetaSketchGeneric::<Murmur3Hasher>::new(4096);
+        for i in 0u64..50_000 {
+            s.update(&i);
+        }
+        assert!((s.estimate() - 50_000.0).abs() / 50_000.0 < 0.05);
     }
 
     #[test]

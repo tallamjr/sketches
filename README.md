@@ -744,7 +744,7 @@ All three distinct counters are at parity-or-better against Apache DataSketches,
 
 ![RMSE by sketch and implementation](assets/benchmarks/rmse_comparison.png)
 
-CPC was previously broken (it reported around 173% error). It is now a faithful ICON+HIP port: roughly 0.34% error on a synthetic stream and 1.17% on a real TPC-H column. HLL gained a HIP estimator that moved its RMSE from 0.0175 to 0.0122, taking it from worse-than-Apache to slightly-better-than-Apache and below the floor:
+CPC was previously broken (it reported around 173% error). It is now an ICON+HIP port: roughly 0.34% error on a synthetic stream and 1.17% on a real TPC-H column. HLL gained a HIP estimator that moved its RMSE from 0.0175 to 0.0122, taking it from worse-than-Apache to slightly-better-than-Apache and below the floor:
 
 ![HLL accuracy before and after HIP](assets/benchmarks/hll_rmse_before_after.png)
 

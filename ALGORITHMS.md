@@ -145,7 +145,7 @@ fn update(&mut self, item: &str) {
 - **Accuracy**: Similar to HLL but smaller serialised size
 - **Memory**: Multi-mode adaptive compression
 
-**Faithful ICON+HIP port.** Our CPC is a faithful port of the Apache DataSketches
+**ICON+HIP port.** Our CPC is a port of the Apache DataSketches
 algorithm, using the ICON estimator together with HIP (and the kxp running term). An
 earlier version of this implementation was broken and reported around 173% error; the
 port fixed it. Measured over 100 trials of 100,000 distinct items at `lg_k = 12`, CPC

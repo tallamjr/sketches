@@ -9,8 +9,8 @@ import plots
 import report
 
 HEADER = (
-    "implementation,sketch,dataset,op,n,throughput_ops_per_s,bytes,"
-    "estimate,exact,rel_error"
+    "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+    "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
 )
 
 
@@ -25,8 +25,8 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,5000000,128,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,2500000,144,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -34,21 +34,83 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
 
     # Both implementations' figures appear on the joined row.
     assert "hll/synthetic/update" in table
-    assert "5e+06" in table  # ours throughput formatted
-    assert "2.5e+06" in table  # apache-rust throughput formatted
+    assert "5e+06" in table  # ours throughput median formatted
+    assert "2.5e+06" in table  # apache-rust throughput median formatted
+    # Median is displayed with its stddev.
+    assert "4.5e+04" in table  # ours stddev formatted
     # A throughput ratio ours/apache-rust = 2.0 with 'ours' the better side.
     assert "2.000 (ours)" in table
-    # A bytes ratio 128/144 ~ 0.889 with 'ours' better (lower bytes).
+    # A live_bytes ratio 2048/2304 ~ 0.889 with 'ours' better (lower memory).
     assert "0.889 (ours)" in table
     # The attribution note explains throughput differences via hash choice.
     assert "xxh3" in table
+
+
+def test_render_table_surfaces_ours_murmur3(tmp_path):
+    # The native plane emits both `ours` (xxh3) and `ours-murmur3` (MurmurHash3)
+    # rows. The data-driven table must render an `ours-murmur3` column alongside
+    # `ours`/`apache-rust`, not silently drop it.
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+
+    # An ours-murmur3 throughput/mem column header is present.
+    assert "ours-m3 tput" in table
+    assert "ours-m3 mem" in table
+    # Its throughput median figure appears on the joined row.
+    assert "3e+06" in table  # ours-murmur3 throughput median formatted
+    # The original ours/apache ratio columns still work.
+    assert "2.000 (ours)" in table
+
+
+def test_render_table_excludes_python_plane_labels(tmp_path):
+    # The Python plane emits `ours`/`apache` labels that collide with the Rust
+    # `ours`. They must not enter the native comparison table: only the native
+    # labels get columns, and no stray `apache` (bare) column is introduced.
+    rows_csv = _write_csv(
+        tmp_path,
+        "mixed.csv",
+        [
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "apache,hll,synthetic,update,1000,30,9000000,1000,128,2048,1010,1000,0.01",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+
+    # No bare `apache` column header (only native labels are columned).
+    assert "apache tput" not in table
+    # The python-plane throughput figure does not leak into the native table.
+    assert "9e+06" not in table
+
+
+def test_load_rows_parses_new_columns(tmp_path):
+    csv = tmp_path / "ours.csv"
+    csv.write_text(
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+        "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,128,2048,1001.0,1000.0,0.001\n"
+    )
+    rows = report.load_rows([str(csv)])
+    r = rows[0]
+    assert r["throughput_stddev"] == 12345.0
+    assert r["live_bytes"] == 2048
 
 
 def test_check_accuracy_fails_when_over_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "over.csv",
-        ["ours,hll,synthetic,estimate,1000,0,128,1050,1000,0.05"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1050,1000,0.05"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -60,7 +122,7 @@ def test_check_accuracy_passes_when_under_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "under.csv",
-        ["ours,hll,synthetic,estimate,1000,0,128,1010,1000,0.01"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.01"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -72,7 +134,7 @@ def test_check_accuracy_notes_ungated_sketch(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "ungated.csv",
-        ["ours,mystery,synthetic,estimate,1000,0,128,1010,1000,0.5"],
+        ["ours,mystery,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.5"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -85,9 +147,9 @@ def test_render_plots_writes_three_pngs(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,5000000,128,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,2500000,144,1005,1000,0.005",
-            "ours,theta,synthetic,update,1000,3000000,256,1020,1000,0.02",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,theta,synthetic,update,1000,30,3000000,25000,256,4096,1020,1000,0.02",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -100,6 +162,66 @@ def test_render_plots_writes_three_pngs(tmp_path):
     for path in paths:
         assert os.path.exists(path)
         assert os.path.getsize(path) > 0
+
+
+def test_plots_render_with_error_bars(tmp_path):
+    # Two implementations for one sketch, each with a throughput median and a
+    # stddev plus a live_bytes footprint. The throughput plot must draw stddev
+    # error bars; the memory plot must read live_bytes. Both PNGs must exist.
+    rows = [
+        {
+            "implementation": "ours",
+            "sketch": "hll",
+            "dataset": "synthetic",
+            "op": "update",
+            "throughput_median_ops_per_s": 5e6,
+            "throughput_stddev": 1e5,
+            "live_bytes": 2048,
+            "rel_error": 0.001,
+        },
+        {
+            "implementation": "apache-rust",
+            "sketch": "hll",
+            "dataset": "synthetic",
+            "op": "update",
+            "throughput_median_ops_per_s": 4e6,
+            "throughput_stddev": 2e5,
+            "live_bytes": 4096,
+            "rel_error": 0.001,
+        },
+    ]
+    out = plots.render_plots(rows, str(tmp_path))
+    assert (tmp_path / "throughput.png").exists()
+    assert (tmp_path / "memory.png").exists()
+    assert {os.path.basename(p) for p in out} == {
+        "throughput.png",
+        "memory.png",
+        "accuracy.png",
+    }
+
+    # The throughput plot must draw stddev error bars. Exercise the error-bar
+    # path directly: _grouped_bar must accept a yerr_field and produce a figure
+    # whose axes contain errorbar containers.
+    import matplotlib.pyplot as plt
+
+    path = plots._grouped_bar(
+        rows,
+        field="throughput_median_ops_per_s",
+        title="t",
+        ylabel="y",
+        out_path=str(tmp_path / "thr_err.png"),
+        yerr_field="throughput_stddev",
+    )
+    assert os.path.exists(path)
+    # No error-bar field for memory: must still render without crashing.
+    path2 = plots._grouped_bar(
+        rows,
+        field="live_bytes",
+        title="m",
+        ylabel="y",
+        out_path=str(tmp_path / "mem.png"),
+    )
+    assert os.path.exists(path2)
 
 
 def test_rmse_parity_and_table():

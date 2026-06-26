@@ -25,7 +25,8 @@
 //!   Theoretical Computer Science, 2004.
 
 use crate::hash::xxh3::Xxh3Hasher;
-use crate::hash::{DEFAULT_SEED, Hashable, hash64_of};
+use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
+use core::marker::PhantomData;
 
 /// Derive a per-row seed that is well-spread across rows.
 /// Multiplying by a large odd constant (Fibonacci hashing) gives good mixing.
@@ -35,14 +36,18 @@ fn row_seed(base_seed: u64, row: usize) -> u64 {
 }
 
 /// Count-Min Sketch for frequency estimation
-pub struct CountMinSketch {
+pub struct CountMinSketchGeneric<H: SketchHasher> {
     width: usize,
     depth: usize,
     table: Vec<Vec<u64>>,
     conservative_update: bool,
+    _hasher: PhantomData<H>,
 }
 
-impl CountMinSketch {
+/// Count-Min Sketch using the default xxh3 backend.
+pub type CountMinSketch = CountMinSketchGeneric<Xxh3Hasher>;
+
+impl<H: SketchHasher> CountMinSketchGeneric<H> {
     /// Create a new Count-Min sketch
     ///
     /// # Arguments
@@ -52,11 +57,12 @@ impl CountMinSketch {
     pub fn new(width: usize, depth: usize, conservative_update: bool) -> Self {
         assert!(width > 0 && depth > 0, "Width and depth must be positive");
 
-        CountMinSketch {
+        CountMinSketchGeneric {
             width,
             depth,
             table: vec![vec![0u64; width]; depth],
             conservative_update,
+            _hasher: PhantomData,
         }
     }
 
@@ -103,7 +109,7 @@ impl CountMinSketch {
     fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
         let mut positions = Vec::with_capacity(self.depth);
         for row in 0..self.depth {
-            let h = hash64_of(&Xxh3Hasher, item, row_seed(DEFAULT_SEED, row));
+            let h = hash64_of(&H::default(), item, row_seed(DEFAULT_SEED, row));
             positions.push((h % self.width as u64) as usize);
         }
         positions
@@ -139,7 +145,7 @@ impl CountMinSketch {
     }
 
     /// Merge another Count-Min sketch into this one
-    pub fn merge(&mut self, other: &CountMinSketch) -> Result<(), &'static str> {
+    pub fn merge(&mut self, other: &CountMinSketchGeneric<H>) -> Result<(), &'static str> {
         if self.width != other.width || self.depth != other.depth {
             return Err("Sketches must have the same dimensions");
         }
@@ -403,6 +409,16 @@ mod tests {
             c.increment(&"hot");
         }
         assert!(c.estimate(&"hot") >= 500);
+    }
+
+    #[test]
+    fn murmur3_countmin_estimates() {
+        use crate::hash::murmur3::Murmur3Hasher;
+        let mut c = CountMinSketchGeneric::<Murmur3Hasher>::new(2048, 5, false);
+        for _ in 0..100 {
+            c.increment(&"hot");
+        }
+        assert!(c.estimate(&"hot") >= 100);
     }
 
     #[test]
