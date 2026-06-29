@@ -31,6 +31,11 @@ def _apply_tahoma():
 
 _apply_tahoma()
 
+# Save PNGs at a higher resolution than the matplotlib default (100 dpi) so the
+# committed plots stay crisp when embedded or zoomed. 200 dpi roughly quadruples
+# the pixel count.
+_SAVE_DPI = 200
+
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
 # Preferred left-to-right ordering for any implementation a CSV might carry.
@@ -160,7 +165,7 @@ def _grouped_bar(
     if plotted_any:
         ax.legend()
 
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -215,7 +220,7 @@ def render_rmse_plot(rows, out_dir):
     ax.legend()
 
     out_path = os.path.join(out_dir, "rmse.png")
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -254,7 +259,94 @@ def render_before_after_rmse_plot(labels_to_rmse, out_path, theoretical):
     ax.set_title("HLL accuracy: before vs after HIP")
     ax.legend()
 
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def render_speedup_plot(rows, out_dir):
+    """Write speedup_vs_apache.png: how many times faster `ours` is than Apache.
+
+    Rows are grouped by (sketch, dataset, op). For each group that carries an
+    `ours` row, up to two speedup ratios are computed from
+    ``throughput_median_ops_per_s``: ``ours / apache-cpp`` and
+    ``ours / apache-rust`` (each only when that reference row exists and its
+    throughput is a positive number). The chart draws one cluster per group with
+    a "vs apache-cpp" and a "vs apache-rust" bar, plus a dashed parity line at
+    y=1.0; bars above the line mean ours is ahead. Returns the written path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    groups = {}
+    order = []
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        groups[key][row["implementation"]] = row
+
+    labels = []
+    cpp_ratios = []
+    rust_ratios = []
+    for key in order:
+        impl_rows = groups[key]
+        ours = impl_rows.get("ours")
+        if ours is None:
+            continue
+        ours_tput = _as_float(ours["throughput_median_ops_per_s"])
+        if ours_tput is None:
+            continue
+
+        def _ratio(impl):
+            ref = impl_rows.get(impl)
+            if ref is None:
+                return None
+            ref_tput = _as_float(ref["throughput_median_ops_per_s"])
+            if ref_tput is None or ref_tput == 0.0:
+                return None
+            return ours_tput / ref_tput
+
+        cpp = _ratio("apache-cpp")
+        rust = _ratio("apache-rust")
+        if cpp is None and rust is None:
+            continue
+
+        labels.append(_label(ours))
+        cpp_ratios.append(cpp)
+        rust_ratios.append(rust)
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
+
+    indices = list(range(len(labels)))
+    bar_width = 0.8 / 2
+
+    ax.bar(
+        [i + 0 * bar_width for i in indices],
+        [v if v is not None else 0.0 for v in cpp_ratios],
+        bar_width,
+        label="vs apache-cpp",
+        color="#4c72b0",
+    )
+    ax.bar(
+        [i + 1 * bar_width for i in indices],
+        [v if v is not None else 0.0 for v in rust_ratios],
+        bar_width,
+        label="vs apache-rust",
+        color="#dd8452",
+    )
+
+    ax.axhline(1.0, linestyle="--", color="black", label="parity")
+
+    centre = (2 - 1) * bar_width / 2.0
+    ax.set_xticks([i + centre for i in indices])
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("ours / apache (x)")
+    ax.set_title("Speedup vs Apache (higher is better, 1.0 = parity)")
+    ax.legend()
+
+    out_path = os.path.join(out_dir, "speedup_vs_apache.png")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 

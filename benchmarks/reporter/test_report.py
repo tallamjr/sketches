@@ -198,6 +198,26 @@ def test_render_plots_writes_three_pngs(tmp_path):
         assert os.path.getsize(path) > 0
 
 
+def test_render_speedup_plot(tmp_path):
+    # One sketch group with ours/apache-cpp/apache-rust throughput such that
+    # ours/apache-cpp = 5e8/2e8 = 2.5x and ours/apache-rust = 5e8/1e8 = 5.0x.
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,distinct_count,1000,30,500000000,45000,490000000,510000000,128,2048,1010,1000,0.01",
+            "apache-cpp,hll,synthetic,distinct_count,1000,30,200000000,30000,195000000,205000000,144,2304,1005,1000,0.005",
+            "apache-rust,hll,synthetic,distinct_count,1000,30,100000000,30000,95000000,105000000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    path = plots.render_speedup_plot(rows, str(tmp_path))
+
+    assert os.path.exists(path)
+    assert os.path.getsize(path) > 0
+    assert os.path.basename(path) == "speedup_vs_apache.png"
+
+
 def test_plots_render_with_error_bars(tmp_path):
     # Two implementations for one sketch, each with a throughput median and a
     # stddev plus a live_bytes footprint. The throughput plot must draw stddev
