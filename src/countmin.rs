@@ -43,7 +43,7 @@ const MAX_HASHES: usize = 64;
 pub struct CountMinSketchGeneric<H: SketchHasher> {
     width: usize,
     depth: usize,
-    table: Vec<Vec<u64>>,
+    table: Vec<u64>,
     conservative_update: bool,
     _hasher: PhantomData<H>,
 }
@@ -64,7 +64,7 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         CountMinSketchGeneric {
             width,
             depth,
-            table: vec![vec![0u64; width]; depth],
+            table: vec![0u64; width * depth],
             conservative_update,
             _hasher: PhantomData,
         }
@@ -125,29 +125,33 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
     }
 
     /// Update counts using scalar operations
-    fn update_scalar(&mut self, hashes: &[usize], count: u64) {
+    fn update_scalar(&mut self, cols: &[usize], count: u64) {
+        let width = self.width;
         if self.conservative_update {
             // Conservative update: only increment if it doesn't exceed the minimum
-            let current_min = self.estimate_scalar(hashes);
-            for (row, &col) in hashes.iter().enumerate() {
-                if self.table[row][col] == current_min {
-                    self.table[row][col] = self.table[row][col].saturating_add(count);
+            let current_min = self.estimate_scalar(cols);
+            for (row, &col) in cols.iter().enumerate() {
+                let idx = row * width + col;
+                if self.table[idx] == current_min {
+                    self.table[idx] = self.table[idx].saturating_add(count);
                 }
             }
         } else {
             // Standard update: increment all positions
-            for (row, &col) in hashes.iter().enumerate() {
-                self.table[row][col] = self.table[row][col].saturating_add(count);
+            for (row, &col) in cols.iter().enumerate() {
+                let idx = row * width + col;
+                self.table[idx] = self.table[idx].saturating_add(count);
             }
         }
     }
 
     /// Estimate frequency using scalar operations
-    fn estimate_scalar(&self, hashes: &[usize]) -> u64 {
+    fn estimate_scalar(&self, cols: &[usize]) -> u64 {
+        let width = self.width;
         let mut min_count = u64::MAX;
 
-        for (row, &col) in hashes.iter().enumerate() {
-            min_count = min_count.min(self.table[row][col]);
+        for (row, &col) in cols.iter().enumerate() {
+            min_count = min_count.min(self.table[row * width + col]);
         }
 
         min_count
@@ -159,11 +163,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
             return Err("Sketches must have the same dimensions");
         }
 
-        // Element-wise addition of the tables
-        for i in 0..self.depth {
-            for j in 0..self.width {
-                self.table[i][j] = self.table[i][j].saturating_add(other.table[i][j]);
-            }
+        // Element-wise addition of the tables (both flat, same length)
+        for i in 0..self.depth * self.width {
+            self.table[i] = self.table[i].saturating_add(other.table[i]);
         }
 
         Ok(())
@@ -174,8 +176,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         // Return the minimum sum across all rows (most conservative estimate)
         let mut min_sum = u64::MAX;
 
-        for row in &self.table {
-            let sum: u64 = row.iter().sum();
+        for row in 0..self.depth {
+            let start = row * self.width;
+            let sum: u64 = self.table[start..start + self.width].iter().sum();
             min_sum = min_sum.min(sum);
         }
 
@@ -189,11 +192,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         let mut heavy_counts = Vec::new();
 
         // Find unique counts that exceed threshold
-        for row in &self.table {
-            for &count in row {
-                if count >= threshold && !heavy_counts.contains(&count) {
-                    heavy_counts.push(count);
-                }
+        for &count in &self.table {
+            if count >= threshold && !heavy_counts.contains(&count) {
+                heavy_counts.push(count);
             }
         }
 
@@ -209,15 +210,13 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         let mut max_count = 0u64;
         let mut min_count = u64::MAX;
 
-        for row in &self.table {
-            for &count in row {
-                total_cells += count;
-                if count > 0 {
-                    non_zero_cells += 1;
-                }
-                max_count = max_count.max(count);
-                min_count = min_count.min(count);
+        for &count in &self.table {
+            total_cells += count;
+            if count > 0 {
+                non_zero_cells += 1;
             }
+            max_count = max_count.max(count);
+            min_count = min_count.min(count);
         }
 
         let fill_ratio = non_zero_cells as f64 / (self.width * self.depth) as f64;
@@ -237,10 +236,8 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Clear the sketch
     pub fn clear(&mut self) {
-        for row in &mut self.table {
-            for count in row {
-                *count = 0;
-            }
+        for count in &mut self.table {
+            *count = 0;
         }
     }
 }
