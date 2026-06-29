@@ -31,6 +31,11 @@ def _apply_tahoma():
 
 _apply_tahoma()
 
+# Save PNGs at a higher resolution than the matplotlib default (100 dpi) so the
+# committed plots stay crisp when embedded or zoomed. 200 dpi roughly quadruples
+# the pixel count.
+_SAVE_DPI = 200
+
 IMPLEMENTATIONS = ["ours", "apache-rust", "apache-cpp"]
 
 # Preferred left-to-right ordering for any implementation a CSV might carry.
@@ -45,6 +50,24 @@ IMPL_ORDER = [
     "apache-cpp",
     "apache",
 ]
+
+
+# Pastel, role-based bar colours. Each implementation keeps the same hue across
+# every plot so the eye tracks it; the palette is muted so it reads on a
+# transparent background under either a light or dark page.
+_IMPL_COLORS = {
+    "ours": "#7aa6c2",         # muted blue
+    "ours-murmur3": "#b3a2c7", # lavender
+    "apache-rust": "#e8998d",  # coral
+    "apache-cpp": "#88c0a3",   # teal-green
+    "apache": "#d9c97e",       # soft gold (Python plane)
+}
+_FALLBACK_COLORS = ["#c9b8a8", "#9ec4b8", "#c7a9bd", "#b8c19a"]
+
+
+def _color_for(impl, idx=0):
+    """Stable pastel colour for an implementation, falling back by index."""
+    return _IMPL_COLORS.get(impl, _FALLBACK_COLORS[idx % len(_FALLBACK_COLORS)])
 
 
 def _ordered_impls(rows):
@@ -65,6 +88,34 @@ def _ordered_impls(rows):
     ordered = [impl for impl in IMPL_ORDER if impl in seen]
     ordered += [impl for impl in present if impl not in IMPL_ORDER]
     return ordered
+
+
+# Implementations that count as an Apache reference in the comparison plots.
+_APACHE_IMPLS = {"apache-rust", "apache-cpp"}
+
+
+def _comparison_rows(rows):
+    """Rows for the cross-implementation comparison bar plots.
+
+    Drops the ``ours-murmur3`` hash-isolation plane (internal analysis, not part
+    of the shipping ``ours`` versus Apache story) and drops any
+    (sketch, dataset, op) group that has no Apache reference row (for example KLL,
+    which Apache does not implement), since a single-bar group is not a
+    comparison. The hash-isolation story stays in the benchmarks prose and the
+    report table; it is only the headline plots that are kept clean.
+    """
+    present_by_key = {}
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        present_by_key.setdefault(key, set()).add(row["implementation"])
+    kept = []
+    for row in rows:
+        if row["implementation"] == "ours-murmur3":
+            continue
+        key = (row["sketch"], row["dataset"], row["op"])
+        if present_by_key[key] & _APACHE_IMPLS:
+            kept.append(row)
+    return kept
 
 
 def _as_float(value):
@@ -145,7 +196,7 @@ def _grouped_bar(
         positions = [i + offset * bar_width for i in indices]
         if any(v is not None for v in series[impl]):
             plotted_any = True
-        bar_kwargs = {"label": impl}
+        bar_kwargs = {"label": impl, "color": _color_for(impl, offset)}
         if yerr_field is not None:
             # Missing/None stddev counts as zero error for that bar.
             bar_kwargs["yerr"] = [e if e is not None else 0.0 for e in errors[impl]]
@@ -160,7 +211,7 @@ def _grouped_bar(
     if plotted_any:
         ax.legend()
 
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -205,7 +256,7 @@ def render_rmse_plot(rows, out_dir):
     for offset, impl in enumerate(IMPLEMENTATIONS):
         heights = [v if v is not None else 0.0 for v in series[impl]]
         positions = [i + offset * bar_width for i in indices]
-        ax.bar(positions, heights, bar_width, label=impl)
+        ax.bar(positions, heights, bar_width, label=impl, color=_color_for(impl, offset))
 
     centre = (n_impls - 1) * bar_width / 2.0
     ax.set_xticks([i + centre for i in indices])
@@ -215,7 +266,7 @@ def render_rmse_plot(rows, out_dir):
     ax.legend()
 
     out_path = os.path.join(out_dir, "rmse.png")
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -254,7 +305,162 @@ def render_before_after_rmse_plot(labels_to_rmse, out_path, theoretical):
     ax.set_title("HLL accuracy: before vs after HIP")
     ax.legend()
 
-    fig.savefig(out_path, transparent=True, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def render_speedup_plot(rows, out_dir):
+    """Write speedup_vs_apache.png: how many times faster `ours` is than Apache.
+
+    Rows are grouped by (sketch, dataset, op). For each group that carries an
+    `ours` row, up to two speedup ratios are computed from
+    ``throughput_median_ops_per_s``: ``ours / apache-cpp`` and
+    ``ours / apache-rust`` (each only when that reference row exists and its
+    throughput is a positive number). The chart draws one cluster per group with
+    a "vs apache-cpp" and a "vs apache-rust" bar, plus a dashed parity line at
+    y=1.0; bars above the line mean ours is ahead. Returns the written path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    groups = {}
+    order = []
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        groups[key][row["implementation"]] = row
+
+    labels = []
+    cpp_ratios = []
+    rust_ratios = []
+    for key in order:
+        impl_rows = groups[key]
+        ours = impl_rows.get("ours")
+        if ours is None:
+            continue
+        ours_tput = _as_float(ours["throughput_median_ops_per_s"])
+        if ours_tput is None:
+            continue
+
+        def _ratio(impl):
+            ref = impl_rows.get(impl)
+            if ref is None:
+                return None
+            ref_tput = _as_float(ref["throughput_median_ops_per_s"])
+            if ref_tput is None or ref_tput == 0.0:
+                return None
+            return ours_tput / ref_tput
+
+        cpp = _ratio("apache-cpp")
+        rust = _ratio("apache-rust")
+        if cpp is None and rust is None:
+            continue
+
+        labels.append(_label(ours))
+        cpp_ratios.append(cpp)
+        rust_ratios.append(rust)
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
+
+    indices = list(range(len(labels)))
+    bar_width = 0.8 / 2
+
+    ax.bar(
+        [i + 0 * bar_width for i in indices],
+        [v if v is not None else 0.0 for v in cpp_ratios],
+        bar_width,
+        label="vs apache-cpp",
+        color=_color_for("apache-cpp"),
+    )
+    ax.bar(
+        [i + 1 * bar_width for i in indices],
+        [v if v is not None else 0.0 for v in rust_ratios],
+        bar_width,
+        label="vs apache-rust",
+        color=_color_for("apache-rust"),
+    )
+
+    ax.axhline(1.0, linestyle="--", color="black", label="parity")
+
+    centre = (2 - 1) * bar_width / 2.0
+    ax.set_xticks([i + centre for i in indices])
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("ours / apache (x)")
+    ax.set_title("Speedup vs Apache (higher is better, 1.0 = parity)")
+    ax.legend()
+
+    out_path = os.path.join(out_dir, "speedup_vs_apache.png")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def render_latency_plot(rows, out_dir):
+    """Write latency.png: time per operation (ns/op), the lower-is-better twin.
+
+    Rows are grouped by (sketch, dataset, op). For each group, every
+    implementation present contributes one bar at
+    ``ns_per_op = 1e9 / throughput_median_ops_per_s`` (skipped when the
+    throughput is missing or zero). Grouped bars with distinct colours, one
+    cluster per group, no parity line (this is absolute time). Returns the
+    written path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    rows = _comparison_rows(rows)
+
+    impls = _ordered_impls(rows)
+
+    groups = {}
+    order = []
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        groups[key][row["implementation"]] = row
+
+    labels = []
+    series = {impl: [] for impl in impls}
+    for key in order:
+        impl_rows = groups[key]
+        values = {}
+        for impl in impls:
+            r = impl_rows.get(impl)
+            tput = _as_float(r["throughput_median_ops_per_s"]) if r else None
+            if tput is None or tput == 0.0:
+                values[impl] = None
+            else:
+                values[impl] = 1e9 / tput
+        if all(v is None for v in values.values()):
+            continue
+        sample = next(iter(impl_rows.values()))
+        labels.append(_label(sample))
+        for impl in impls:
+            series[impl].append(values[impl])
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
+
+    n_groups = len(labels)
+    n_impls = len(impls)
+    bar_width = 0.8 / n_impls
+    indices = list(range(n_groups))
+
+    for offset, impl in enumerate(impls):
+        heights = [v if v is not None else 0.0 for v in series[impl]]
+        positions = [i + offset * bar_width for i in indices]
+        ax.bar(positions, heights, bar_width, label=impl, color=_color_for(impl, offset))
+
+    centre = (n_impls - 1) * bar_width / 2.0
+    ax.set_xticks([i + centre for i in indices])
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("ns / op")
+    ax.set_title("Latency per operation (ns/op, lower is better)")
+    ax.legend()
+
+    out_path = os.path.join(out_dir, "latency.png")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -265,6 +471,7 @@ def render_plots(rows, out_dir):
     Returns the list of written paths in that order.
     """
     os.makedirs(out_dir, exist_ok=True)
+    rows = _comparison_rows(rows)
 
     written = []
     written.append(

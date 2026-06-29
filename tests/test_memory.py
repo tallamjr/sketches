@@ -1,110 +1,47 @@
+"""Memory-efficiency tests based on the sketches' bounded serialised size.
+
+Process RSS deltas are far too noisy to measure a few-kilobyte sketch (and a
+Rust-owned heap is not visible to Python memory tools anyway), so these tests
+compare each sketch's serialised size, a stable and bounded quantity, against
+the cost of storing the exact distinct set. That is the property that matters:
+a sketch holds a fixed, tiny summary regardless of how many items it has seen.
+"""
+
 import sys
-import subprocess
-import pytest
-import logging
 
-# Skip if psutil is not available
-pytest.importorskip("psutil")
+from sketches import CpcSketch, HllSketch, ThetaSketch
 
 
-def test_sketch_memory_much_lower_than_set():
-    """
-    Compare RSS memory usage of Python set vs each sketch implementation.
-    Each sketch should use at most 10% of the set's memory.
-    """
-    N = 20000
-    py = sys.executable
-    # Inline script to run in isolated process
-    script = """\
-import os
-import psutil
-from sketches import HllSketch, ThetaSketch, CpcSketch
+def _exact_set_bytes(values):
+    """Approximate bytes to store the exact distinct set: the set container plus
+    every distinct element it holds."""
+    distinct = set(values)
+    return sys.getsizeof(distinct) + sum(sys.getsizeof(v) for v in distinct)
 
-# prepare items
-values = [str(i) for i in range({N})]
-proc = psutil.Process(os.getpid())
 
-# measure set memory
-rss0 = proc.memory_info().rss
-s = set(values)
-rss1 = proc.memory_info().rss
+def _serialised_size(sketch, values):
+    for v in values:
+        sketch.update(v)
+    return len(sketch.to_bytes())
 
-# measure HLL sketch memory
-sk_hll = HllSketch(12)  # Use default precision
-for v in values:
-    sk_hll.update(v)
-rss2 = proc.memory_info().rss
 
-# measure Theta sketch memory
-sk_th = ThetaSketch(4096)  # Use default k
-for v in values:
-    sk_th.update(v)
-rss3 = proc.memory_info().rss
+def test_sketch_serialised_size_far_below_exact_set():
+    """Each cardinality sketch serialises to a small fraction of the memory the
+    exact distinct set requires."""
+    n = 20000
+    values = [str(i) for i in range(n)]
+    exact = _exact_set_bytes(values)
+    assert exact > 0, "failed to size the exact set"
 
-# measure CPC sketch memory
-sk_cp = CpcSketch(11)  # Use default precision
-for v in values:
-    sk_cp.update(v)
-rss4 = proc.memory_info().rss
+    sizes = {
+        "HLL": _serialised_size(HllSketch(12), values),
+        "Theta": _serialised_size(ThetaSketch(4096), values),
+        "CPC": _serialised_size(CpcSketch(11), values),
+    }
 
-# measure Polars DataFrame memory (if available)
-try:
-    import polars as pl
-    rss_pol1 = proc.memory_info().rss
-    df = pl.DataFrame({{"v": values}})
-    rss_pol2 = proc.memory_info().rss
-    print(f"POLARS {{rss_pol2 - rss_pol1}}")
-except ImportError:
-    # Polars not installed; report zero
-    print("POLARS 0")
-
-# report all deltas
-print(f"SET {{rss1 - rss0}}")
-print(f"HLL {{rss2 - rss1}}")
-print(f"THETA {{rss3 - rss2}}")
-print(f"CPC {{rss4 - rss3}}")
-""".format(N=N)
-    # Execute the measurement script
-    logging.info("Running memory measurement subprocess with N=%d", N)
-    result = subprocess.run(
-        [py, "-c", script],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    out = result.stdout.strip().splitlines()
-    mem = {}
-    for line in out:
-        key, val = line.split()
-        mem[key] = int(val)
-    # Log memory usage for each component
-    for key, val in sorted(mem.items()):
-        logging.info("%s memory: %d bytes", key, val)
-
-    set_mem = mem.get("SET", 0)
-    logging.info("SET memory: %d bytes", set_mem)
-    assert set_mem > 0, "Failed to measure set memory"
-    # Sketches should use at most 15% of set memory (more realistic threshold)
-    threshold = 0.15
-    for name in ("HLL", "THETA", "CPC"):
-        sketch_mem = mem.get(name, 0)
-        max_allowed = set_mem * threshold
-        logging.info("%s memory: %d bytes (threshold: %d)", name, sketch_mem, max_allowed)
-        assert sketch_mem < max_allowed, (
-            f"{name} uses too much memory: {sketch_mem} bytes "
-            f">= {threshold*100}% of set memory ({set_mem} bytes)"
-        )
-    # Polars DataFrame should use more memory than sketches, but be reasonable
-    polars_mem = mem.get("POLARS", 0)
-    if polars_mem == 0:
-        logging.info("Polars not available, skipping Polars comparison")
-    else:
-        max_sketch = max(mem.get(name, 0) for name in ("HLL", "THETA", "CPC"))
-        # More realistic expectation: Polars should use at least 2x the largest sketch
-        min_expected = max_sketch * 2
-        logging.info("POLARS memory: %d bytes (threshold: %d)", polars_mem, min_expected)
-        assert polars_mem > min_expected, (
-            f"Polars uses unexpectedly little memory: {polars_mem} bytes "
-            f"<= 2x max sketch memory ({max_sketch} bytes). "
-            f"This suggests sketches may not be providing expected memory savings."
+    for name, size in sizes.items():
+        assert size > 0, f"{name} serialised to zero bytes"
+        assert size < 0.15 * exact, (
+            f"{name} serialised size {size} bytes is not far below the exact "
+            f"set ({exact} bytes); expected under 15%"
         )

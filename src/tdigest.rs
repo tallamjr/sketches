@@ -20,13 +20,16 @@
 //! - Dunning, T. "Computing Extremely Accurate Quantiles Using t-Digests." 2019.
 //!   https://arxiv.org/abs/1902.04023
 
-use crate::serialization::{FAMILY_TDIGEST_LOCAL, Serializable, SerializationError};
+use crate::serialization::{
+    FAMILY_STREAMING_TDIGEST, FAMILY_TDIGEST_LOCAL, Serializable, SerializationError,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use tdigest::TDigest as CoreTDigest;
 
 /// Serial format version for the T-Digest postcard payload.
 const TDIGEST_SERIAL_VERSION: u8 = 1;
+const STREAMING_TDIGEST_SERIAL_VERSION: u8 = 1;
 
 /// T-Digest for streaming quantile estimation
 ///
@@ -396,11 +399,31 @@ impl fmt::Display for TDigestStats {
 ///
 /// This variant automatically triggers merges when the internal buffer
 /// gets too large, providing more predictable memory usage for streaming applications.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamingTDigest {
     digest: TDigest,
     buffer: Vec<f64>,
     buffer_size: usize,
+}
+
+impl Serializable for StreamingTDigest {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("StreamingTDigest decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_STREAMING_TDIGEST
+    }
+
+    fn serial_version(&self) -> u8 {
+        STREAMING_TDIGEST_SERIAL_VERSION
+    }
 }
 
 impl StreamingTDigest {

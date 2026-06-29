@@ -4,7 +4,7 @@
 //! CSV row in the schema defined in `benchmarks/results/schema.md`:
 //!
 //! ```text
-//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error
 //! ```
 //!
 //! This runner emits two `implementation` labels: `ours` for the crate default
@@ -30,7 +30,7 @@ use sketches::serialization::Serializable;
 use sketches::theta::{ThetaSketch, ThetaSketchGeneric};
 
 /// The exact CSV header line shared by all runners.
-pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error";
+pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error";
 
 /// Implementation label for the crate default (xxh3-backed) sketches.
 const IMPL_OURS: &str = "ours";
@@ -52,8 +52,7 @@ fn row(
     op: &str,
     n: u64,
     reps: u64,
-    throughput_median: f64,
-    throughput_stddev: f64,
+    t: timing::Throughput,
     bytes: Option<usize>,
     live_bytes: Option<usize>,
     estimate: Option<f64>,
@@ -66,7 +65,8 @@ fn row(
     let exact = exact.map(|v| format!("{v:.6}")).unwrap_or_default();
     let rel_error = rel_error.map(|v| format!("{v:.6}")).unwrap_or_default();
     format!(
-        "{implementation},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
+        "{implementation},{sketch},{dataset},{op},{n},{reps},{:.6},{:.6},{:.6},{:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}",
+        t.median, t.stddev, t.ci_low, t.ci_high
     )
 }
 
@@ -83,7 +83,7 @@ fn hll_row_with<H: SketchHasher, T: Hashable>(
     reps: usize,
 ) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = HllSketchGeneric::<H>::new(12);
         for item in items {
             sketch.update(item);
@@ -111,8 +111,7 @@ fn hll_row_with<H: SketchHasher, T: Hashable>(
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -142,7 +141,7 @@ fn cpc_row_with<H: SketchHasher, T: Hashable>(
     reps: usize,
 ) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = CpcSketchGeneric::<H>::new(12);
         for item in items {
             sketch.update(item);
@@ -166,8 +165,7 @@ fn cpc_row_with<H: SketchHasher, T: Hashable>(
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -196,7 +194,7 @@ fn theta_row_with<H: SketchHasher, T: Hashable>(
     reps: usize,
 ) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = ThetaSketchGeneric::<H>::new(4096);
         for item in items {
             sketch.update(item);
@@ -220,8 +218,7 @@ fn theta_row_with<H: SketchHasher, T: Hashable>(
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -251,7 +248,7 @@ fn bloom_row_with<H: SketchHasher, T: Hashable>(
     reps: usize,
 ) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut filter = BloomFilterGeneric::<H>::new(n as usize, 0.01);
         for item in items {
             filter.add(item);
@@ -273,8 +270,7 @@ fn bloom_row_with<H: SketchHasher, T: Hashable>(
         "build",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         None,
@@ -305,7 +301,7 @@ fn countmin_row_with<H: SketchHasher, T: Hashable>(
 ) -> String {
     let n = items.len() as u64;
     let total_ops = n + HOT_KEY_COUNT;
-    let (median, stddev) = timing::timed_throughput(reps, true, total_ops, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, total_ops, || {
         let mut sketch = CountMinSketchGeneric::<H>::new(2048, 5, false);
         for item in items {
             sketch.increment(item);
@@ -336,8 +332,7 @@ fn countmin_row_with<H: SketchHasher, T: Hashable>(
         "point_query",
         total_ops,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -359,7 +354,7 @@ fn countmin_row_murmur3<T: Hashable>(dataset: &str, items: &[T], reps: usize) ->
 /// KLL median row over the synthetic numeric range. The exact median of
 /// `0..n` mapped to `f64` is `n / 2`.
 fn kll_synthetic_row(n: u64, reps: usize) -> String {
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = KllSketch::<f64>::new(200);
         for i in synthetic_distinct(n) {
             sketch.update(i as f64);
@@ -386,8 +381,7 @@ fn kll_synthetic_row(n: u64, reps: usize) -> String {
         "quantile_median",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),

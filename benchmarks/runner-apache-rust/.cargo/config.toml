@@ -1,0 +1,6 @@
+# runner-apache-rust uses a counting global allocator (CountingAlloc) whose LIVE
+# counter is a process-wide atomic. Tests that allocate concurrently cause
+# spurious assertion failures in the delta_is_nonzero_and_monotonic test.
+# Single-threaded execution eliminates that interference.
+[env]
+RUST_TEST_THREADS = "1"

@@ -10,7 +10,8 @@ import report
 
 HEADER = (
     "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
-    "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
+    "throughput_stddev,throughput_ci_low,throughput_ci_high,"
+    "bytes,live_bytes,estimate,exact,rel_error"
 )
 
 
@@ -25,8 +26,8 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -54,9 +55,9 @@ def test_render_table_surfaces_ours_murmur3(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,128,2048,1008,1000,0.008",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,2900000,3100000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -71,6 +72,23 @@ def test_render_table_surfaces_ours_murmur3(tmp_path):
     assert "2.000 (ours)" in table
 
 
+def test_render_table_has_murmur3_vs_apache_ratios(tmp_path):
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,update,1000,10,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,10,2600000,40000,2500000,2700000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,10,2500000,30000,2450000,2550000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+    assert "tput ours-m3/a-rust" in table
+    # 2.6e6 / 2.5e6 = 1.040, ours-murmur3 the better side
+    assert "1.040 (ours)" in table
+
+
 def test_render_table_excludes_python_plane_labels(tmp_path):
     # The Python plane emits `ours`/`apache` labels that collide with the Rust
     # `ours`. They must not enter the native comparison table: only the native
@@ -79,9 +97,9 @@ def test_render_table_excludes_python_plane_labels(tmp_path):
         tmp_path,
         "mixed.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
-            "apache,hll,synthetic,update,1000,30,9000000,1000,128,2048,1010,1000,0.01",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
+            "apache,hll,synthetic,update,1000,30,9000000,1000,8900000,9100000,128,2048,1010,1000,0.01",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -97,8 +115,9 @@ def test_load_rows_parses_new_columns(tmp_path):
     csv = tmp_path / "ours.csv"
     csv.write_text(
         "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
-        "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error\n"
-        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,128,2048,1001.0,1000.0,0.001\n"
+        "throughput_stddev,throughput_ci_low,throughput_ci_high,"
+        "bytes,live_bytes,estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,4800000.0,5200000.0,128,2048,1001.0,1000.0,0.001\n"
     )
     rows = report.load_rows([str(csv)])
     r = rows[0]
@@ -106,11 +125,26 @@ def test_load_rows_parses_new_columns(tmp_path):
     assert r["live_bytes"] == 2048
 
 
+def test_load_rows_parses_ci_columns(tmp_path):
+    csv = tmp_path / "ours.csv"
+    csv.write_text(
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+        "throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,"
+        "estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,10,5000000.0,12345.0,4800000.0,5200000.0,"
+        "128,2048,1001.0,1000.0,0.001\n"
+    )
+    rows = report.load_rows([str(csv)])
+    r = rows[0]
+    assert r["throughput_ci_low"] == 4800000.0
+    assert r["throughput_ci_high"] == 5200000.0
+
+
 def test_check_accuracy_fails_when_over_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "over.csv",
-        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1050,1000,0.05"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,0,0,128,2048,1050,1000,0.05"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -122,7 +156,7 @@ def test_check_accuracy_passes_when_under_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "under.csv",
-        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.01"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,0,0,128,2048,1010,1000,0.01"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -134,7 +168,7 @@ def test_check_accuracy_notes_ungated_sketch(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "ungated.csv",
-        ["ours,mystery,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.5"],
+        ["ours,mystery,synthetic,estimate,1000,30,0,0,0,0,128,2048,1010,1000,0.5"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -147,9 +181,9 @@ def test_render_plots_writes_three_pngs(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
-            "ours,theta,synthetic,update,1000,30,3000000,25000,256,4096,1020,1000,0.02",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
+            "ours,theta,synthetic,update,1000,30,3000000,25000,2900000,3100000,256,4096,1020,1000,0.02",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -162,6 +196,42 @@ def test_render_plots_writes_three_pngs(tmp_path):
     for path in paths:
         assert os.path.exists(path)
         assert os.path.getsize(path) > 0
+
+
+def test_render_speedup_plot(tmp_path):
+    # One sketch group with ours/apache-cpp/apache-rust throughput such that
+    # ours/apache-cpp = 5e8/2e8 = 2.5x and ours/apache-rust = 5e8/1e8 = 5.0x.
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,distinct_count,1000,30,500000000,45000,490000000,510000000,128,2048,1010,1000,0.01",
+            "apache-cpp,hll,synthetic,distinct_count,1000,30,200000000,30000,195000000,205000000,144,2304,1005,1000,0.005",
+            "apache-rust,hll,synthetic,distinct_count,1000,30,100000000,30000,95000000,105000000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    path = plots.render_speedup_plot(rows, str(tmp_path))
+
+    assert os.path.exists(path)
+    assert os.path.getsize(path) > 0
+    assert os.path.basename(path) == "speedup_vs_apache.png"
+
+
+def test_render_latency_plot(tmp_path):
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,distinct_count,1000,20,500000000,1,490000000,510000000,4096,4096,1000,1000,0.01",
+            "apache-cpp,hll,synthetic,distinct_count,1000,20,200000000,1,196000000,204000000,4192,4192,1000,1000,0.01",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    path = plots.render_latency_plot(rows, str(tmp_path))
+    assert path.endswith("latency.png")
+    import os
+    assert os.path.exists(path) and os.path.getsize(path) > 0
 
 
 def test_plots_render_with_error_bars(tmp_path):
@@ -256,3 +326,65 @@ def test_font_family_resolves_to_tahoma():
     # Tahoma is installed in this environment, so importing plots (which calls
     # _apply_tahoma at import time) must resolve the family to Tahoma.
     assert plots.plt.rcParams["font.family"] == ["Tahoma"]
+
+
+def test_separation_disjoint_intervals():
+    v, ratio = report.separation(100.0, 95.0, 105.0, 130.0, 125.0, 135.0)
+    assert v == "separated"
+    assert abs(ratio - 1.3) < 1e-9
+
+
+def test_separation_overlapping_intervals():
+    v, _ = report.separation(100.0, 90.0, 110.0, 108.0, 100.0, 116.0)
+    assert v == "within noise"
+
+
+def test_render_compare_table(tmp_path):
+    base = _write_csv(
+        tmp_path, "base.csv",
+        ["ours,hll,synthetic,update,1000,10,5000000,45000,4900000,5100000,128,2048,1010,1000,0.01"],
+    )
+    cand = _write_csv(
+        tmp_path, "cand.csv",
+        ["ours,hll,synthetic,update,1000,10,5600000,45000,5500000,5700000,128,2048,1010,1000,0.01"],
+    )
+    base_rows = report.load_rows([base])
+    cand_rows = report.load_rows([cand])
+    table = report.render_compare(base_rows, cand_rows)
+    assert "hll/synthetic/update" in table
+    assert "separated" in table        # CIs [4.9M,5.1M] vs [5.5M,5.7M] disjoint
+    assert "1.120" in table            # 5.6M / 5.0M speedup
+
+
+def test_noise_warnings_flags_wide_ci(tmp_path):
+    rows = report.load_rows([_write_csv(
+        tmp_path, "noisy.csv",
+        [
+            # half-width (5.2M-4.8M)/2 = 0.2M = 4% of 5M -> OK
+            "ours,hll,synthetic,update,1000,10,5000000,1,4800000,5200000,128,2048,1010,1000,0.01",
+            # half-width (7M-3M)/2 = 2M = 40% of 5M -> flagged
+            "ours,theta,synthetic,update,1000,10,5000000,1,3000000,7000000,128,2048,1010,1000,0.01",
+        ],
+    )])
+    warnings = report.noise_warnings(rows, frac=0.05)
+    joined = " ".join(warnings)
+    assert "theta" in joined
+    assert "hll" not in joined
+
+
+def test_comparison_rows_drops_murmur3_and_peerless_sketches():
+    # ours-murmur3 is internal hash-isolation; kll has no Apache peer. Both must
+    # be excluded from the comparison bar plots, while ours/apache rows for a
+    # sketch that has a peer are kept.
+    rows = [
+        {"implementation": "ours", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "ours-murmur3", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "apache-cpp", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "ours", "sketch": "kll", "dataset": "synthetic", "op": "quantile_median"},
+    ]
+    kept = plots._comparison_rows(rows)
+    impls = {(r["implementation"], r["sketch"]) for r in kept}
+    assert ("ours", "hll") in impls
+    assert ("apache-cpp", "hll") in impls
+    assert ("ours-murmur3", "hll") not in impls   # hash-isolation plane dropped
+    assert ("ours", "kll") not in impls           # no Apache peer -> dropped

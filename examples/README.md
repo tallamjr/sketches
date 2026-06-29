@@ -1,51 +1,39 @@
 # Sketches Examples
 
-This directory contains examples demonstrating the usage of various probabilistic data structures implemented in this library.
+This directory contains runnable examples demonstrating the probabilistic data structures provided by this library. Every example listed below ships in this directory and can be run with the command shown.
 
 ## Rust Examples
-- `basic_usage.rs` - Basic usage of all sketch types
-- `hll_comparison.rs` - Comparing HLL variants
-- `tpch_generate.rs` - Generate TPC-H benchmark data
-- `tpch_benchmarks.rs` - Run benchmarks on TPC-H data
 
-## Python Examples
-- `tpch_test.py` - Comprehensive testing with TPC-H data
+Run any example with `cargo run --example <name>`. Add `--release` for the throughput-oriented demos.
+
+- `simple_demo` - Minimal tour of Bloom, CPC, HLL, and Theta sketches.
+  `cargo run --example simple_demo`
+- `basic_usage` - Broader walkthrough of the core sketch types and their estimates.
+  `cargo run --example basic_usage`
+- `aod_demo` - Array of Doubles sketch: cardinality with associated double values, set operations, and merging.
+  `cargo run --example aod_demo`
+- `bloom_filter_demo` - Standard and counting Bloom filters for approximate membership.
+  `cargo run --example bloom_filter_demo`
+- `cardinality_optimization_demo` - Linear and hybrid counters compared against HLL for distinct counting.
+  `cargo run --example cardinality_optimization_demo`
+- `frequency_estimation_demo` - Count-Min and Count sketches for frequency and heavy-hitter estimation.
+  `cargo run --example frequency_estimation_demo`
+- `hll_comparison` - Compares the HyperLogLog variants (HLL, HLL++, sparse HLL++).
+  `cargo run --example hll_comparison --release`
+- `quantiles_demo` - Quantile estimation with the KLL sketch.
+  `cargo run --example quantiles_demo`
+- `reservoir_sampling_demo` - Reservoir sampling algorithms, including weighted sampling.
+  `cargo run --example reservoir_sampling_demo`
+- `tdigest_demo` - T-Digest quantile estimation, with a comparison against the KLL sketch.
+  `cargo run --example tdigest_demo`
 
 ## Jupyter Notebooks
-- `getting_started.ipynb` - Introduction to probabilistic data structures
 
-## TPC-H Benchmarking
+- `tpch_performance_analysis.ipynb` - A TPC-H business-intelligence notebook exploring sketch behaviour on TPC-H style data.
 
-The library includes support for TPC-H benchmarking using [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs), allowing standardised testing and performance comparison.
+To open the notebook:
 
-### Generate TPC-H Data
-```bash
-# Generate at scale factor 0.01 (10MB)
-cargo run --example tpch_generate -- 0.01 tpch_data
-
-# Generate at scale factor 0.1 (100MB)
-cargo run --example tpch_generate -- 0.1 tpch_data
-```
-
-### Run Benchmarks
-```bash
-# Rust benchmarks
-cargo run --example tpch_benchmarks --release
-
-# Python tests
-python examples/tpch_test.py 0.01 tpch_data
-```
-
-## Running Other Examples
-
-### Rust Examples
-```bash
-cargo run --example basic_usage
-cargo run --example hll_comparison --release
-```
-
-### Jupyter Notebooks
 ```bash
 pip install -e .[dev]
-jupyter lab examples/
+jupyter lab examples/tpch_performance_analysis.ipynb
 ```

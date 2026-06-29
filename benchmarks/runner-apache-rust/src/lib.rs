@@ -5,16 +5,18 @@
 //! so that the reporter can join the two implementations row-for-row:
 //!
 //! ```text
-//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+//! implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error
 //! ```
 //!
 //! The `implementation` field is always `apache-rust` here. Only the four
 //! sketches that both libraries provide are emitted (`hll`, `theta`, `bloom`,
 //! `countmin`); the Apache Rust crate has no KLL, so no `kll` row is produced.
 //!
-//! Throughput follows the shared warmup+reps protocol (see [`timing`]): one
-//! untimed warmup pass, then `reps` timed reps rebuilding a fresh sketch each
-//! rep, reporting the median and population stddev of per-rep throughput.
+//! Throughput follows the shared rounds protocol (see [`timing`]): `reps`
+//! independent rounds, each with one untimed warmup pass then
+//! `REPS_PER_ROUND` timed reps rebuilding a fresh sketch each rep, reporting
+//! the median, population stddev, and a nonparametric 95% bootstrap CI over the
+//! per-round samples.
 //!
 //! `run` produces the synthetic-dataset rows; `run_tpch` produces the rows for
 //! a single TPC-H column.
@@ -32,7 +34,7 @@ use datasketches::hll::{HllSketch, HllType};
 use datasketches::theta::ThetaSketch;
 
 /// The exact CSV header line shared by all runners.
-pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error";
+pub const HEADER: &str = "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error";
 
 const IMPLEMENTATION: &str = "apache-rust";
 const HOT_KEY: &str = "__hot__";
@@ -49,8 +51,7 @@ fn row(
     op: &str,
     n: u64,
     reps: u64,
-    throughput_median: f64,
-    throughput_stddev: f64,
+    t: timing::Throughput,
     bytes: Option<usize>,
     live_bytes: Option<usize>,
     estimate: Option<f64>,
@@ -63,7 +64,8 @@ fn row(
     let exact = exact.map(|v| format!("{v:.6}")).unwrap_or_default();
     let rel_error = rel_error.map(|v| format!("{v:.6}")).unwrap_or_default();
     format!(
-        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{reps},{throughput_median:.6},{throughput_stddev:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}"
+        "{IMPLEMENTATION},{sketch},{dataset},{op},{n},{reps},{:.6},{:.6},{:.6},{:.6},{bytes},{live_bytes},{estimate},{exact},{rel_error}",
+        t.median, t.stddev, t.ci_low, t.ci_high
     )
 }
 
@@ -79,7 +81,7 @@ impl<T: std::hash::Hash + Clone> Item for T {}
 /// estimation tests exercise by default.
 fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = HllSketch::new(12, HllType::Hll8);
         for item in items {
             // Apache `update<T: Hash>(value: T)` takes the value by value.
@@ -107,8 +109,7 @@ fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -124,7 +125,7 @@ fn hll_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
 /// serialized length.
 fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = CpcSketch::new(12);
         for item in items {
             sketch.update(item.clone());
@@ -147,8 +148,7 @@ fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -164,7 +164,7 @@ fn cpc_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> Stri
 /// `compact(true).serialize()`.
 fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut sketch = ThetaSketch::builder().lg_k(12).build();
         for item in items {
             sketch.update(item.clone());
@@ -187,8 +187,7 @@ fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> St
         "distinct_count",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -203,7 +202,7 @@ fn theta_row<T: Item>(dataset: &str, items: &[T], exact: f64, reps: usize) -> St
 /// our `BloomFilter::new(n, 0.01, false)`. Bytes is the serialized length.
 fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
-    let (median, stddev) = timing::timed_throughput(reps, true, n, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, n, || {
         let mut filter = BloomFilterBuilder::with_accuracy(n.max(1), 0.01).build();
         for item in items {
             // Apache `insert<T: Hash>(item: T)` takes the value by value.
@@ -225,8 +224,7 @@ fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         "build",
         n,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         None,
@@ -244,7 +242,7 @@ fn bloom_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
 fn countmin_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
     let n = items.len() as u64;
     let total_ops = n + HOT_KEY_COUNT;
-    let (median, stddev) = timing::timed_throughput(reps, true, total_ops, || {
+    let t = timing::timed_throughput_rounds(reps, timing::REPS_PER_ROUND, total_ops, || {
         let mut sketch = CountMinSketch::<u64>::new(5, 2048);
         for item in items {
             sketch.update(item.clone());
@@ -274,8 +272,7 @@ fn countmin_row<T: Item>(dataset: &str, items: &[T], reps: usize) -> String {
         "point_query",
         total_ops,
         reps as u64,
-        median,
-        stddev,
+        t,
         Some(bytes),
         Some(live),
         Some(estimate),
@@ -380,4 +377,15 @@ pub fn run_tpch(
         bloom_row(dataset, &refs, reps),
         countmin_row(dataset, &refs, reps),
     ])
+}
+
+#[cfg(test)]
+mod header_tests {
+    #[test]
+    fn header_has_ci_columns() {
+        assert_eq!(
+            super::HEADER,
+            "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error"
+        );
+    }
 }

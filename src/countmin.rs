@@ -26,7 +26,15 @@
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
+use crate::serialization::{
+    FAMILY_COUNT_SKETCH, FAMILY_COUNTMIN, Serializable, SerializationError,
+};
 use core::marker::PhantomData;
+use serde::{Deserialize, Serialize};
+
+/// Serial format version for the Count-Min postcard payloads.
+const COUNTMIN_SERIAL_VERSION: u8 = 1;
+const COUNT_SKETCH_SERIAL_VERSION: u8 = 1;
 
 /// Derive a per-row seed that is well-spread across rows.
 /// Multiplying by a large odd constant (Fibonacci hashing) gives good mixing.
@@ -35,12 +43,22 @@ fn row_seed(base_seed: u64, row: usize) -> u64 {
     base_seed.wrapping_add((row as u64).wrapping_mul(0x9E3779B97F4A7C15))
 }
 
+/// Maximum number of rows handled on the stack per operation. Real
+/// configurations use depth of roughly 5; this cap is far above any practical depth.
+const MAX_HASHES: usize = 64;
+
 /// Count-Min Sketch for frequency estimation
+///
+/// The `bound = ""` attribute keeps serde from requiring `H: Serialize`; the
+/// hash backend is a zero-sized marker that is skipped and rebuilt on decode.
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct CountMinSketchGeneric<H: SketchHasher> {
     width: usize,
     depth: usize,
-    table: Vec<Vec<u64>>,
+    table: Vec<u64>,
     conservative_update: bool,
+    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 
@@ -60,7 +78,7 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         CountMinSketchGeneric {
             width,
             depth,
-            table: vec![vec![0u64; width]; depth],
+            table: vec![0u64; width * depth],
             conservative_update,
             _hasher: PhantomData,
         }
@@ -87,8 +105,11 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Update the count for an item
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, count: u64) {
-        let hashes = self.hash_item(item);
-        self.update_scalar(&hashes, count);
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let cols = &mut buf[..self.depth];
+        self.hash_positions_into(item, cols);
+        self.update_scalar(cols, count);
     }
 
     /// Increment the count for an item by 1
@@ -98,47 +119,53 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Estimate the frequency of an item
     pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
-        let hashes = self.hash_item(item);
-        self.estimate_scalar(&hashes)
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let cols = &mut buf[..self.depth];
+        self.hash_positions_into(item, cols);
+        self.estimate_scalar(cols)
     }
 
-    /// Generate hash values for an item using one independent xxh3 hash per row.
+    /// Fill `out[..depth]` with this item's per-row column positions using one
+    /// independent xxh3 hash per row. `out` must be at least `depth` long.
     ///
     /// Each row receives a distinct seed derived from DEFAULT_SEED, ensuring
     /// pairwise-independent hashes as required by the Count-Min error guarantee.
-    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
-        let mut positions = Vec::with_capacity(self.depth);
-        for row in 0..self.depth {
+    fn hash_positions_into<T: Hashable + ?Sized>(&self, item: &T, out: &mut [usize]) {
+        for (row, slot) in out.iter_mut().enumerate().take(self.depth) {
             let h = hash64_of(&H::default(), item, row_seed(DEFAULT_SEED, row));
-            positions.push((h % self.width as u64) as usize);
+            *slot = (h % self.width as u64) as usize;
         }
-        positions
     }
 
     /// Update counts using scalar operations
-    fn update_scalar(&mut self, hashes: &[usize], count: u64) {
+    fn update_scalar(&mut self, cols: &[usize], count: u64) {
+        let width = self.width;
         if self.conservative_update {
             // Conservative update: only increment if it doesn't exceed the minimum
-            let current_min = self.estimate_scalar(hashes);
-            for (row, &col) in hashes.iter().enumerate() {
-                if self.table[row][col] == current_min {
-                    self.table[row][col] = self.table[row][col].saturating_add(count);
+            let current_min = self.estimate_scalar(cols);
+            for (row, &col) in cols.iter().enumerate() {
+                let idx = row * width + col;
+                if self.table[idx] == current_min {
+                    self.table[idx] = self.table[idx].saturating_add(count);
                 }
             }
         } else {
             // Standard update: increment all positions
-            for (row, &col) in hashes.iter().enumerate() {
-                self.table[row][col] = self.table[row][col].saturating_add(count);
+            for (row, &col) in cols.iter().enumerate() {
+                let idx = row * width + col;
+                self.table[idx] = self.table[idx].saturating_add(count);
             }
         }
     }
 
     /// Estimate frequency using scalar operations
-    fn estimate_scalar(&self, hashes: &[usize]) -> u64 {
+    fn estimate_scalar(&self, cols: &[usize]) -> u64 {
+        let width = self.width;
         let mut min_count = u64::MAX;
 
-        for (row, &col) in hashes.iter().enumerate() {
-            min_count = min_count.min(self.table[row][col]);
+        for (row, &col) in cols.iter().enumerate() {
+            min_count = min_count.min(self.table[row * width + col]);
         }
 
         min_count
@@ -150,11 +177,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
             return Err("Sketches must have the same dimensions");
         }
 
-        // Element-wise addition of the tables
-        for i in 0..self.depth {
-            for j in 0..self.width {
-                self.table[i][j] = self.table[i][j].saturating_add(other.table[i][j]);
-            }
+        // Element-wise addition of the tables (both flat, same length)
+        for i in 0..self.depth * self.width {
+            self.table[i] = self.table[i].saturating_add(other.table[i]);
         }
 
         Ok(())
@@ -165,8 +190,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         // Return the minimum sum across all rows (most conservative estimate)
         let mut min_sum = u64::MAX;
 
-        for row in &self.table {
-            let sum: u64 = row.iter().sum();
+        for row in 0..self.depth {
+            let start = row * self.width;
+            let sum: u64 = self.table[start..start + self.width].iter().sum();
             min_sum = min_sum.min(sum);
         }
 
@@ -180,11 +206,9 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         let mut heavy_counts = Vec::new();
 
         // Find unique counts that exceed threshold
-        for row in &self.table {
-            for &count in row {
-                if count >= threshold && !heavy_counts.contains(&count) {
-                    heavy_counts.push(count);
-                }
+        for &count in &self.table {
+            if count >= threshold && !heavy_counts.contains(&count) {
+                heavy_counts.push(count);
             }
         }
 
@@ -200,15 +224,13 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
         let mut max_count = 0u64;
         let mut min_count = u64::MAX;
 
-        for row in &self.table {
-            for &count in row {
-                total_cells += count;
-                if count > 0 {
-                    non_zero_cells += 1;
-                }
-                max_count = max_count.max(count);
-                min_count = min_count.min(count);
+        for &count in &self.table {
+            total_cells += count;
+            if count > 0 {
+                non_zero_cells += 1;
             }
+            max_count = max_count.max(count);
+            min_count = min_count.min(count);
         }
 
         let fill_ratio = non_zero_cells as f64 / (self.width * self.depth) as f64;
@@ -228,11 +250,29 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Clear the sketch
     pub fn clear(&mut self) {
-        for row in &mut self.table {
-            for count in row {
-                *count = 0;
-            }
+        for count in &mut self.table {
+            *count = 0;
         }
+    }
+}
+
+impl<H: SketchHasher> Serializable for CountMinSketchGeneric<H> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("CountMinSketch decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_COUNTMIN
+    }
+
+    fn serial_version(&self) -> u8 {
+        COUNTMIN_SERIAL_VERSION
     }
 }
 
@@ -251,10 +291,30 @@ pub struct CountMinStats {
 }
 
 /// Count Sketch - similar to Count-Min but uses signed counters for better accuracy
+#[derive(Serialize, Deserialize)]
 pub struct CountSketch {
     width: usize,
     depth: usize,
     table: Vec<Vec<i64>>,
+}
+
+impl Serializable for CountSketch {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("CountSketch decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_COUNT_SKETCH
+    }
+
+    fn serial_version(&self) -> u8 {
+        COUNT_SKETCH_SERIAL_VERSION
+    }
 }
 
 impl CountSketch {
@@ -280,12 +340,13 @@ impl CountSketch {
 
     /// Estimate the frequency of an item
     pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> i64 {
-        let mut estimates = Vec::with_capacity(self.depth);
-
-        for i in 0..self.depth {
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0i64; MAX_HASHES];
+        let estimates = &mut buf[..self.depth];
+        for (i, slot) in estimates.iter_mut().enumerate() {
             let hash_pos = self.hash_position(item, i);
             let sign = self.hash_sign(item, i);
-            estimates.push(self.table[i][hash_pos] * sign);
+            *slot = self.table[i][hash_pos] * sign;
         }
 
         // Return the median estimate
@@ -426,11 +487,12 @@ mod tests {
         // With a wide sketch (4096 columns) and independent per-row hashes,
         // a single item should map to different columns across almost all rows.
         let c = CountMinSketch::new(4096, 5, false);
-        let positions = c.hash_item(&"some_item");
-        let distinct: std::collections::HashSet<usize> = positions.iter().copied().collect();
+        let mut cols = [0usize; 5];
+        c.hash_positions_into(&"some_item", &mut cols);
+        let distinct: std::collections::HashSet<usize> = cols.iter().copied().collect();
         assert!(
             distinct.len() >= 4,
-            "rows collapse to same column: {positions:?}"
+            "rows collapse to same column: {cols:?}"
         );
     }
 }

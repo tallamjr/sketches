@@ -4,7 +4,7 @@
 fn header_has_new_columns() {
     assert_eq!(
         runner_ours::HEADER,
-        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error"
     );
 }
 
@@ -12,12 +12,12 @@ fn header_has_new_columns() {
 fn emits_reps_and_stddev_columns() {
     let rows = runner_ours::run(1000, 5);
     assert!(runner_ours::HEADER.contains("throughput_stddev"));
-    // skip the header line; every data row has 13 comma-separated fields
+    // skip the header line; every data row has 15 comma-separated fields
     for r in &rows[1..] {
         assert_eq!(
             r.split(',').count(),
-            13,
-            "data row should have 13 columns: {r}"
+            15,
+            "data row should have 15 columns: {r}"
         );
     }
 }
@@ -27,17 +27,17 @@ fn emits_valid_schema_and_reasonable_hll() {
     let lines = runner_ours::run(10_000, 5);
 
     assert!(lines[0].starts_with(
-        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error"
     ));
 
-    // every data row has 13 comma-separated fields matching the header
+    // every data row has 15 comma-separated fields matching the header
     let header_fields = lines[0].split(',').count();
-    assert_eq!(header_fields, 13, "header should have 13 columns");
+    assert_eq!(header_fields, 15, "header should have 15 columns");
     for line in &lines[1..] {
         assert_eq!(
             line.split(',').count(),
-            13,
-            "data row should have 13 columns: {line}"
+            15,
+            "data row should have 15 columns: {line}"
         );
     }
 

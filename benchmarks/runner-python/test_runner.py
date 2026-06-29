@@ -15,7 +15,8 @@ def test_ours_emits_rows(tmp_path):
         rows = list(csv.reader(f))
     assert rows[0] == (
         "implementation,sketch,dataset,op,n,reps,"
-        "throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,"
+        "throughput_median_ops_per_s,throughput_stddev,"
+        "throughput_ci_low,throughput_ci_high,bytes,live_bytes,"
         "estimate,exact,rel_error"
     ).split(",")
     assert all(r[0] == "ours" for r in rows[1:])

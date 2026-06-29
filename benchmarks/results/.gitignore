@@ -1,6 +1,17 @@
-# Generated benchmark artefacts are not tracked; schema, baselines, and committed reference numbers are.
+# Generated benchmark artefacts are not tracked; schema, baselines, and the
+# canonical published reference numbers (synthetic, RMSE, TPC-H) are tracked so
+# every claim in the docs is reproducible from committed data.
 *.csv
 !*.baseline.csv
+!ours.csv
+!apache-rust.csv
+!cpp.csv
+!rmse_ours.csv
+!rmse_apache-cpp.csv
+!rmse_apache-rust.csv
+!tpch-ours.csv
+!tpch-apache-rust.csv
+!tpch-cpp.csv
 *.png
 plots/
 report.md

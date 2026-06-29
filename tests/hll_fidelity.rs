@@ -54,7 +54,7 @@ fn hll_merge_is_accurate_via_composite_fallback() {
     for i in 500_000u64..1_000_000 {
         b.update(&i);
     }
-    a.merge(&b);
+    a.merge(&b).expect("equal precision merge");
     let e = (a.estimate() - 1_000_000.0).abs() / 1_000_000.0;
     assert!(e < 0.03, "merged hll rel_error {e}");
 }

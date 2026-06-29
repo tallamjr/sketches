@@ -5,11 +5,13 @@
 // shared CSV schema so the reporter can join C++ reference numbers directly.
 //
 // Schema (must match benchmarks/runner-ours exactly):
-//   implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+//   implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error
 //
-// Throughput follows the shared warmup+reps protocol: one untimed warmup pass,
-// then `reps` timed reps rebuilding a fresh sketch each rep, reporting the
-// median and population stddev of per-rep throughput.
+// Throughput follows the shared rounds protocol: `reps` independent rounds, each
+// with one untimed warmup pass then REPS_PER_ROUND timed reps rebuilding a fresh
+// sketch per rep; the round-sample is the median of its per-rep rates. The row
+// reports the median over round-samples, their population stddev, and a
+// deterministic 95% bootstrap CI (fixed-seed SplitMix64) over them.
 //
 // Usage:
 //   runner_cpp --n <N> [--reps <R>] [--tpch <csv_path> --col <COL>] --out <results.csv>
@@ -140,13 +142,20 @@ namespace {
 
 const char* const HEADER =
     "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,"
+    "throughput_ci_low,throughput_ci_high,"
     "bytes,live_bytes,estimate,exact,rel_error";
 
 const char* const IMPLEMENTATION = "apache-cpp";
 const std::string HOT_KEY = "__hot__";
 const uint64_t HOT_KEY_COUNT = 1000;
-// Default number of timed reps for the warmup+reps throughput protocol.
+// Default number of rounds for the rounds throughput protocol.
 const int DEFAULT_REPS = 30;
+// Timed reps inside each independent round; the round-sample is their median.
+const int REPS_PER_ROUND = 5;
+// Number of bootstrap resamples for the throughput confidence interval.
+const int BOOTSTRAP_RESAMPLES = 2000;
+// Fixed SplitMix64 seed so the bootstrap CI is reproducible run to run.
+const uint64_t BOOTSTRAP_SEED = 0x9E3779B97F4A7C15ULL;
 
 // HLL configuration matching runner-ours (lg_k = 12).
 const uint8_t HLL_LG_K = 12;
@@ -169,17 +178,27 @@ std::string format_f64(double value) {
   return out.str();
 }
 
+// A stabilised throughput measurement: the median over independent rounds, the
+// population stddev of the round-samples, and a nonparametric 95% bootstrap CI.
+struct Throughput {
+  double median;
+  double stddev;
+  double ci_low;
+  double ci_high;
+};
+
 // Build one CSV row. Optional fields are passed as empty strings. `live_bytes`
 // is the net heap delta to build and hold one populated sketch, measured by
 // measure_live outside the timed reps.
 std::string row(const std::string& sketch, const std::string& dataset, const std::string& op,
-                uint64_t n, int reps, double throughput_median, double throughput_stddev,
+                uint64_t n, int reps, const Throughput& t,
                 const std::string& bytes, const std::string& live_bytes,
                 const std::string& estimate, const std::string& exact,
                 const std::string& rel_error) {
   std::ostringstream out;
   out << IMPLEMENTATION << ',' << sketch << ',' << dataset << ',' << op << ',' << n << ',' << reps
-      << ',' << format_f64(throughput_median) << ',' << format_f64(throughput_stddev) << ','
+      << ',' << format_f64(t.median) << ',' << format_f64(t.stddev) << ','
+      << format_f64(t.ci_low) << ',' << format_f64(t.ci_high) << ','
       << bytes << ',' << live_bytes << ',' << estimate << ',' << exact << ','
       << rel_error;
   return out.str();
@@ -208,6 +227,12 @@ double median(std::vector<double>& xs) {
   return (xs[n / 2 - 1] + xs[n / 2]) / 2.0;
 }
 
+// Median over a copy, leaving the caller's vector untouched. median() sorts its
+// argument in place, so the bootstrap resample loop (which reuses one draw
+// buffer) must go through this pass-by-value helper to avoid corrupting the
+// buffer-to-sample correspondence between iterations.
+double median_copy(std::vector<double> xs) { return median(xs); }
+
 // Population standard deviation (divides by n). Returns 0 for an empty vector.
 double population_stddev(const std::vector<double>& xs) {
   if (xs.empty()) {
@@ -227,24 +252,73 @@ double population_stddev(const std::vector<double>& xs) {
   return std::sqrt(var);
 }
 
-// Run `body` once untimed (if warmup), then `reps` timed reps. Each rep is
-// assumed to perform `ops_per_rep` operations. Returns {median, stddev} ops/s,
-// matching the runner-ours timing helper semantics exactly.
-std::pair<double, double> timed_throughput(int reps, bool warmup, uint64_t ops_per_rep,
-                                           const std::function<void()>& body) {
-  if (warmup) {
-    body();
+// SplitMix64 step. Deterministic, identical across the Rust and Python runners.
+uint64_t splitmix64(uint64_t& state) {
+  state += 0x9E3779B97F4A7C15ULL;
+  uint64_t z = state;
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  return z ^ (z >> 31);
+}
+
+// Nonparametric 95% bootstrap CI of the median over `samples`. Deterministic:
+// fixed-seed SplitMix64, B=2000 resamples, 2.5/97.5 nearest-rank percentiles.
+// Returns (median, median) when fewer than two samples are given. Mirrors the
+// Rust runners' bootstrap_ci exactly so the CI columns are cross-language.
+std::pair<double, double> bootstrap_ci(const std::vector<double>& samples) {
+  const size_t r = samples.size();
+  if (r <= 1) {
+    const double m = r == 1 ? samples[0] : 0.0;
+    return {m, m};
   }
-  std::vector<double> rates;
-  rates.reserve(static_cast<size_t>(reps));
-  for (int i = 0; i < reps; ++i) {
-    const auto start = Clock::now();
-    body();
-    const double secs = std::chrono::duration<double>(Clock::now() - start).count();
-    rates.push_back(secs > 0.0 ? static_cast<double>(ops_per_rep) / secs : 0.0);
+  uint64_t state = BOOTSTRAP_SEED;
+  std::vector<double> resample_medians;
+  resample_medians.reserve(static_cast<size_t>(BOOTSTRAP_RESAMPLES));
+  std::vector<double> draw(r);
+  for (int b = 0; b < BOOTSTRAP_RESAMPLES; ++b) {
+    for (size_t i = 0; i < r; ++i) {
+      draw[i] = samples[splitmix64(state) % r];
+    }
+    resample_medians.push_back(median_copy(draw));
   }
-  const double stddev = population_stddev(rates);
-  return {median(rates), stddev};
+  std::sort(resample_medians.begin(), resample_medians.end());
+  const int B = BOOTSTRAP_RESAMPLES;
+  auto idx = [B](double p) {
+    long i = static_cast<long>(std::floor(p * B));
+    if (i < 0) i = 0;
+    if (i > B - 1) i = B - 1;
+    return static_cast<size_t>(i);
+  };
+  return {resample_medians[idx(0.025)], resample_medians[idx(0.975)]};
+}
+
+// Run `rounds` independent rounds. Each round does one untimed warmup body()
+// then `reps_per_round` timed body() calls; the round-sample is the median of
+// its per-rep rates (ops/s). Reports the median over round-samples, their
+// population stddev, and the bootstrap CI over them. Matches the runner-ours
+// timing helper semantics exactly.
+Throughput timed_throughput_rounds(int rounds, int reps_per_round, uint64_t ops_per_rep,
+                                   const std::function<void()>& body) {
+  std::vector<double> round_samples;
+  round_samples.reserve(static_cast<size_t>(rounds));
+  for (int r = 0; r < rounds; ++r) {
+    body();  // untimed warmup
+    std::vector<double> rates;
+    rates.reserve(static_cast<size_t>(reps_per_round));
+    for (int i = 0; i < reps_per_round; ++i) {
+      const auto start = Clock::now();
+      body();
+      const double secs = std::chrono::duration<double>(Clock::now() - start).count();
+      rates.push_back(secs > 0.0 ? static_cast<double>(ops_per_rep) / secs : 0.0);
+    }
+    round_samples.push_back(median(rates));
+  }
+  const double sd = population_stddev(round_samples);
+  const std::pair<double, double> ci = bootstrap_ci(round_samples);
+  const double lo = ci.first;
+  const double hi = ci.second;
+  const double med = median_copy(round_samples);
+  return {med, sd, lo, hi};
 }
 
 // Measure the net heap bytes attributable to building and holding ONE populated
@@ -269,7 +343,7 @@ template <typename T>
 std::string hll_row(const std::string& dataset, const std::vector<T>& items, double exact,
                     int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
-  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+  const Throughput tput = timed_throughput_rounds(reps, REPS_PER_ROUND, n, [&] {
     datasketches::hll_sketch sketch(HLL_LG_K, datasketches::HLL_8);
     for (const T& item : items) {
       sketch.update(item);
@@ -294,7 +368,7 @@ std::string hll_row(const std::string& dataset, const std::vector<T>& items, dou
         bytes = s.get_compact_serialization_bytes();
       });
   const double rel_error = std::abs(estimate - exact) / exact;
-  return row("hll", dataset, "distinct_count", n, reps, tput.first, tput.second,
+  return row("hll", dataset, "distinct_count", n, reps, tput,
              std::to_string(bytes), std::to_string(live), format_f64(estimate),
              format_f64(exact), format_f64(rel_error));
 }
@@ -304,7 +378,7 @@ template <typename T>
 std::string cpc_row(const std::string& dataset, const std::vector<T>& items, double exact,
                     int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
-  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+  const Throughput tput = timed_throughput_rounds(reps, REPS_PER_ROUND, n, [&] {
     datasketches::cpc_sketch sketch(CPC_LG_K);
     for (const T& item : items) {
       sketch.update(item);
@@ -326,7 +400,7 @@ std::string cpc_row(const std::string& dataset, const std::vector<T>& items, dou
         bytes = s.serialize().size();
       });
   const double rel_error = std::abs(estimate - exact) / exact;
-  return row("cpc", dataset, "distinct_count", n, reps, tput.first, tput.second,
+  return row("cpc", dataset, "distinct_count", n, reps, tput,
              std::to_string(bytes), std::to_string(live), format_f64(estimate),
              format_f64(exact), format_f64(rel_error));
 }
@@ -336,7 +410,7 @@ template <typename T>
 std::string theta_row(const std::string& dataset, const std::vector<T>& items, double exact,
                       int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
-  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+  const Throughput tput = timed_throughput_rounds(reps, REPS_PER_ROUND, n, [&] {
     auto sketch = datasketches::update_theta_sketch::builder().set_lg_k(THETA_LG_K).build();
     for (const T& item : items) {
       sketch.update(item);
@@ -361,7 +435,7 @@ std::string theta_row(const std::string& dataset, const std::vector<T>& items, d
         bytes = compact.get_serialized_size_bytes();
       });
   const double rel_error = std::abs(estimate - exact) / exact;
-  return row("theta", dataset, "distinct_count", n, reps, tput.first, tput.second,
+  return row("theta", dataset, "distinct_count", n, reps, tput,
              std::to_string(bytes), std::to_string(live), format_f64(estimate),
              format_f64(exact), format_f64(rel_error));
 }
@@ -373,7 +447,7 @@ std::string bloom_row(const std::string& dataset, const std::vector<T>& items, i
   const uint64_t n = static_cast<uint64_t>(items.size());
   // Size the filter for n distinct items at the target false positive rate.
   const uint64_t max_items = n > 0 ? n : 1;
-  const std::pair<double, double> tput = timed_throughput(reps, true, n, [&] {
+  const Throughput tput = timed_throughput_rounds(reps, REPS_PER_ROUND, n, [&] {
     datasketches::bloom_filter filter =
         datasketches::bloom_filter::builder::create_by_accuracy(max_items, BLOOM_TARGET_FPP);
     for (const T& item : items) {
@@ -392,7 +466,7 @@ std::string bloom_row(const std::string& dataset, const std::vector<T>& items, i
         return f;
       },
       [&](const datasketches::bloom_filter& f) { bytes = f.get_serialized_size_bytes(); });
-  return row("bloom", dataset, "build", n, reps, tput.first, tput.second, std::to_string(bytes),
+  return row("bloom", dataset, "build", n, reps, tput, std::to_string(bytes),
              std::to_string(live), "", "", "");
 }
 
@@ -402,7 +476,7 @@ template <typename T>
 std::string countmin_row(const std::string& dataset, const std::vector<T>& items, int reps) {
   const uint64_t n = static_cast<uint64_t>(items.size());
   const uint64_t total_ops = n + HOT_KEY_COUNT;
-  const std::pair<double, double> tput = timed_throughput(reps, true, total_ops, [&] {
+  const Throughput tput = timed_throughput_rounds(reps, REPS_PER_ROUND, total_ops, [&] {
     datasketches::count_min_sketch<uint64_t> sketch(COUNTMIN_NUM_HASHES, COUNTMIN_NUM_BUCKETS);
     for (const T& item : items) {
       sketch.update(item, 1);
@@ -431,7 +505,7 @@ std::string countmin_row(const std::string& dataset, const std::vector<T>& items
       });
   const double exact = static_cast<double>(HOT_KEY_COUNT);
   const double rel_error = std::abs(estimate - exact) / exact;
-  return row("countmin", dataset, "point_query", total_ops, reps, tput.first, tput.second,
+  return row("countmin", dataset, "point_query", total_ops, reps, tput,
              std::to_string(bytes), std::to_string(live), format_f64(estimate),
              format_f64(exact), format_f64(rel_error));
 }
@@ -636,6 +710,26 @@ int main(int argc, char** argv) {
                    "populated HLL sketch; the allocation counter is broken"
                 << std::endl;
       return 2;
+    }
+  }
+
+  // Cross-language parity self-check: bootstrap_ci of the pinned input vector
+  // must reproduce the values the Rust runners pinned, byte for byte, or the
+  // SplitMix64/bootstrap port has diverged and the CI columns are meaningless.
+  {
+    std::vector<double> samples = {100.0, 110.0, 90.0, 105.0, 95.0, 120.0,
+                                   80.0, 115.0, 85.0, 100.0};
+    const std::pair<double, double> ci = bootstrap_ci(samples);
+    const double lo = ci.first;
+    const double hi = ci.second;
+    const double want_lo = 90.0;
+    const double want_hi = 110.0;
+    if (std::abs(lo - want_lo) > 1e-6 || std::abs(hi - want_hi) > 1e-6) {
+      std::cerr << "runner_cpp: bootstrap_ci parity self-check failed: got ["
+                << lo << ", " << hi << "], want [" << want_lo << ", " << want_hi
+                << "]; the SplitMix64/bootstrap port diverges from Rust"
+                << std::endl;
+      return 3;
     }
   }
 

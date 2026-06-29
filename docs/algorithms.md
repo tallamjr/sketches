@@ -1,13 +1,15 @@
-# Algorithm Deep Dive
+# Algorithm deep dive
+
+[Back to the README](../README.md)
 
 This document provides detailed explanations of all probabilistic data structure algorithms implemented in this library, with focus on their technical implementation and performance characteristics.
 
-## Hash Function Requirements for Probabilistic Data Structures
+## Hash function requirements for probabilistic data structures
 
 All sketches in this library rely on hash functions for randomisation and compact
 representation. The choice of hash function directly affects accuracy and performance.
 
-### Why Non-Cryptographic Hashes
+### Why non-cryptographic hashes
 
 Probabilistic data structures do not need collision resistance or preimage resistance
 (security properties). They need:
@@ -25,7 +27,7 @@ Probabilistic data structures do not need collision resistance or preimage resis
 4. **Avalanche effect**: Small input changes should flip ~50% of output bits.
    This prevents systematic bias from correlated inputs.
 
-### What This Library Uses
+### What this library uses
 
 A single canonical, pluggable `SketchHasher` is used in every build, providing both
 64-bit and 128-bit hashes. It defaults to [xxh3](https://github.com/Cyan4973/xxHash),
@@ -37,7 +39,7 @@ with Apache DataSketches. There is no separate "optimised" hash mode: the earlie
 `optimized` feature (and the SipHash/FxHash split it implied) has been removed, and the
 implementation is pure scalar Rust throughout.
 
-### Guidance from Literature
+### Guidance from literature
 
 Gakhov (2019) recommends MurmurHash3, CityHash, or FarmHash for probabilistic data
 structures. The key insight: cryptographic hash functions (MD5, SHA-1, SHA-256) are
@@ -49,11 +51,23 @@ which is in the same family of fast, well-distributed non-cryptographic hashes.
 > of collisions, allowing a lot of data to be quickly hashed with a reasonable error
 > probability." -- Gakhov, Ch. 1
 
-## 📊 **Cardinality Estimation Algorithms**
+### Performance framing
 
-### **HyperLogLog (HLL) vs HyperLogLog++ (HLL++) vs Compressed Probabilistic Counting (CPC)**
+On the stabilised benchmark harness this library leads Apache DataSketches on
+throughput across the covered sketches: it is ahead on four of the five shared sketches
+against hand-tuned Apache C++ on synthetic integers (Bloom is within about 4%), ahead on
+all five against Apache C++ on real TPC-H string columns, and ahead on all five against
+the Apache Rust crate. The lead is driven by the hash: xxh3 is faster per call than the
+MurmurHash3 Apache uses, and the distinct-counter update is hash-bound. Accuracy stays
+at parity by multi-trial RMSE (within 1.25x of Apache either way, at or below the
+`1/sqrt(k)` floor). This page covers the algorithms themselves; for
+the measured numbers, plots, and reproduction steps, see [docs/benchmarks.md](benchmarks.md).
 
-#### **HyperLogLog (Basic)**
+## Cardinality estimation
+
+### HyperLogLog (HLL) vs HyperLogLog++ (HLL++) vs Compressed Probabilistic Counting (CPC)
+
+#### HyperLogLog (basic)
 
 ```rust
 // For each new item:
@@ -81,11 +95,11 @@ Probability (HIP) estimator: an incremental accumulator updated each time a regi
 rank increases, falling back to a composite estimator when updates arrive out of order
 (for example after a merge), with the HIP state persisted through serialisation. HIP is
 what takes HLL below the `1/sqrt(k)` floor. Measured over 100 trials of 100,000 distinct
-items at `lg_k = 12`, this moved HLL RMSE from 0.0175 (pre-HIP) to 0.0122, slightly
-better than Apache DataSketches (0.0129) and below the 0.0156 floor. See the README for
-the full multi-trial RMSE table.
+items at `lg_k = 12`, this moved HLL RMSE from 0.0175 (pre-HIP) to 0.0122, parity with
+Apache DataSketches (0.0129, both below the 0.0156 floor). See
+[docs/benchmarks.md](benchmarks.md) for the full multi-trial RMSE table.
 
-#### **HyperLogLog++ (Advanced)**
+#### HyperLogLog++ (advanced)
 
 ```rust
 // Enhanced with sparse representation and 64-bit hashing
@@ -111,9 +125,9 @@ fn estimate() -> f64 {
 - **Time Complexity**: O(1) amortized (sparse→dense conversion)
 - **Space Complexity**: O(k) sparse, O(2^p) dense
 - **Accuracy**: ~0.5% relative error with bias correction
-- **Memory**: Adaptive - small for low cardinality, fixed for high
+- **Memory**: Adaptive, small for low cardinality, fixed for high
 
-#### **Compressed Probabilistic Counting (CPC)**
+#### Compressed Probabilistic Counting (CPC)
 
 ```rust
 // Uses compression and table modes for different ranges
@@ -154,11 +168,11 @@ real TPC-H column CPC reports around 1.17% relative error.
 
 ---
 
-## 🎯 **Sampling Algorithms**
+## Sampling
 
-### **Reservoir Sampling: Algorithm R vs Algorithm A**
+### Reservoir sampling: Algorithm R vs Algorithm A
 
-#### **Algorithm R (Basic Reservoir Sampling)**
+#### Algorithm R (basic reservoir sampling)
 
 ```rust
 // For each new item:
@@ -179,7 +193,7 @@ if reservoir.len() < capacity {
 - **Simple**: Straightforward implementation, easy to understand
 - **Memory**: O(k) where k is reservoir size
 
-#### **Algorithm A (Vitter's Optimized Algorithm)**
+#### Algorithm A (Vitter's optimised algorithm)
 
 ```rust
 // Key insight: Skip items probabilistically instead of checking every item
@@ -204,11 +218,11 @@ fn compute_next_skip() {
 - **Time Complexity**: O(1) amortized, much fewer random calls
 - **Random Calls**: Uses geometric distribution to determine how many items to skip
 - **Optimization**: Skips items without random generation, processes in batches
-- **Performance**: ~19x faster for large datasets in our implementation
+- **Performance**: much faster than Algorithm R for large datasets (Vitter's published result for the skip-based variant)
 
-**The Key Insight**: Instead of asking "should I replace this item?" for every single item, Algorithm A asks "how many items should I skip before the next potential replacement?" This dramatically reduces expensive random number generations.
+**The key insight**: Instead of asking "should I replace this item?" for every single item, Algorithm A asks "how many items should I skip before the next potential replacement?" This dramatically reduces expensive random number generations.
 
-#### **Weighted Reservoir Sampling (A-Res)**
+#### Weighted reservoir sampling (A-Res)
 
 ```rust
 // Each item gets a key = uniform_random^(1/weight)
@@ -236,11 +250,11 @@ fn add_weighted(&mut self, item: T, weight: f64) {
 
 ---
 
-## 📈 **Quantile Estimation Algorithms**
+## Quantile estimation
 
-### **KLL Sketch vs T-Digest**
+### KLL Sketch vs T-Digest
 
-#### **KLL Sketch (K-Minimum Values)**
+#### KLL Sketch (K-Minimum Values)
 
 ```rust
 // Geometric levels structure for compaction
@@ -273,7 +287,7 @@ fn compact_level(&mut self, level: usize) {
 - **Accuracy**: Provable error bounds ±ε with high probability
 - **Merging**: Exact merge operations maintain error bounds
 
-#### **T-Digest**
+#### T-Digest
 
 ```rust
 // Adaptive compression using centroids
@@ -307,15 +321,15 @@ fn add(&mut self, value: f64) {
 - **Accuracy**: Better for extreme quantiles (p95, p99) than uniform quantiles
 - **Streaming**: Excellent for streaming data with adaptive compression
 
-**Key Difference**: KLL provides **provable error bounds** and exact merging, while T-Digest provides **better practical accuracy** for extreme quantiles with adaptive compression.
+**Key difference**: KLL provides **provable error bounds** and exact merging, while T-Digest provides **better practical accuracy** for extreme quantiles with adaptive compression.
 
 ---
 
-## 🏗️ **Set Operations & Membership Testing**
+## Set operations and membership testing
 
-### **Bloom Filter vs Counting Bloom Filter**
+### Bloom Filter vs Counting Bloom Filter
 
-#### **Standard Bloom Filter**
+#### Standard Bloom Filter
 
 ```rust
 // Multiple hash functions map to bit array
@@ -343,7 +357,7 @@ fn contains(&self, item: &str) -> bool {
 - **False Negatives**: Impossible
 - **Deletion**: Not supported
 
-#### **Counting Bloom Filter**
+#### Counting Bloom Filter
 
 ```rust
 // Counters instead of bits allow deletion
@@ -372,43 +386,46 @@ fn remove(&mut self, item: &str) -> bool {
 **Characteristics:**
 
 - **Time Complexity**: O(k) for add/remove/contains
-- **Space Complexity**: O(m × counter_bits) - larger than standard Bloom
+- **Space Complexity**: O(m × counter_bits), larger than standard Bloom
 - **False Positives**: Possible but reduced over time with deletions
 - **False Negatives**: Impossible
 - **Deletion**: Supported with counter overflow protection
 
 ---
 
-## 📊 **Frequency Estimation Algorithms**
+## Frequency estimation
 
-### **Count-Min Sketch vs Count Sketch vs Frequent Items**
+### Count-Min Sketch vs Count Sketch vs Frequent Items
 
-#### **Count-Min Sketch**
+#### Count-Min Sketch
 
 ```rust
 // Conservative frequency estimation using minimum
 struct CountMinSketch {
-    table: Vec<Vec<u64>>,    // depth × width matrix
+    table: Vec<u64>,         // depth × width counters, stored flat (row * width + col)
     depth: usize,            // Number of hash functions
     width: usize,            // Counter array size per row
 }
 
 fn update(&mut self, item: &str, count: u64) {
     for row in 0..self.depth {
-        let hash = hash_function(item, row) % self.width;
-        self.table[row][hash] += count;  // Increment counter in each row
+        let col = hash_function(item, row) % self.width;
+        self.table[row * self.width + col] += count;  // Increment counter in each row
     }
 }
 
 fn estimate(&self, item: &str) -> u64 {
     let mut min_count = u64::MAX;
     for row in 0..self.depth {
-        let hash = hash_function(item, row) % self.width;
-        min_count = min_count.min(self.table[row][hash]);  // Take minimum
+        let col = hash_function(item, row) % self.width;
+        min_count = min_count.min(self.table[row * self.width + col]);  // Take minimum
     }
     min_count
 }
 ```
+
+The counter table is stored as a single contiguous `Vec<u64>` indexed `row * width + col`
+rather than a vector of vectors, so each row stays cache-local during the depth loop.
 
 **Characteristics:**
 
@@ -418,7 +435,7 @@ fn estimate(&self, item: &str) -> u64 {
 - **Bias**: Always overestimates (due to hash collisions)
 - **Heavy Hitters**: Good for finding frequent items
 
-#### **Count Sketch**
+#### Count Sketch
 
 ```rust
 // Uses signed updates to cancel out noise
@@ -455,7 +472,7 @@ fn estimate(&self, item: &str) -> i64 {
 - **Noise Cancellation**: Random signs help cancel hash collision noise
 - **Point Queries**: Better for single-item frequency queries
 
-#### **Frequent Items Sketch (Space-Saving)**
+#### Frequent Items Sketch (Space-Saving)
 
 ```rust
 // Tracks top-k heavy hitters with error bounds
@@ -489,7 +506,7 @@ fn update(&mut self, item: &str) {
 
 ---
 
-## 🎛️ **Algorithm Selection Guide**
+## Algorithm selection guide
 
 | **Use Case**               | **Recommended Algorithm** | **Why**                                             |
 | -------------------------- | ------------------------- | --------------------------------------------------- |
@@ -497,7 +514,7 @@ fn update(&mut self, item: &str) {
 | **Small Cardinalities**    | Linear Counter → HLL      | Better accuracy for n < 1000, auto-transition       |
 | **Set Operations**         | Theta Sketch              | Only algorithm supporting union/intersection        |
 | **Compressed Storage**     | CPC                       | Smallest serialized size, good for network transfer |
-| **Uniform Sampling**       | Algorithm A               | 19x faster than Algorithm R for large streams       |
+| **Uniform Sampling**       | Algorithm A               | Skips items probabilistically (Vitter), faster than R for large streams |
 | **Weighted Sampling**      | A-Res                     | Correct probability-proportional sampling           |
 | **Quantiles (Streaming)**  | T-Digest                  | Better for extreme quantiles (p95, p99)             |
 | **Quantiles (Merging)**    | KLL Sketch                | Exact merge with provable error bounds              |
@@ -507,7 +524,7 @@ fn update(&mut self, item: &str) {
 | **Point Queries**          | Count Sketch              | Unbiased estimates with median                      |
 | **Top-K Items**            | Frequent Items            | Specifically designed for heavy hitters             |
 
-## 🔬 **Performance Characteristics Summary**
+## Performance characteristics summary
 
 | Algorithm          | Time/Update    | Space         | Accuracy         | Special Properties      |
 | ------------------ | -------------- | ------------- | ---------------- | ----------------------- |
@@ -516,23 +533,23 @@ fn update(&mut self, item: &str) {
 | **CPC**            | O(1) average   | Minimal       | RMSE 0.0089 at lg_k=12 | Best compression, ICON+HIP |
 | **Linear Counter** | O(1)           | O(m)          | <1% for small n  | Exact for small sets    |
 | **Algorithm R**    | O(1)           | O(k)          | Exact            | Simple uniform sampling |
-| **Algorithm A**    | O(1)           | O(k)          | Exact            | 19x faster than R       |
+| **Algorithm A**    | O(1)           | O(k)          | Exact            | Skips items (Vitter), faster than R |
 | **T-Digest**       | O(log C)       | O(C)          | <1%              | Great for extremes      |
 | **KLL**            | O(log n)       | O(k log n)    | ±ε provable      | Exact merging           |
 | **Bloom Filter**   | O(h)           | O(m)          | p false positive | No false negatives      |
 | **Count-Min**      | O(d)           | O(d×w)        | ε-δ bounds       | Always overestimates    |
 | **Count Sketch**   | O(d)           | O(d×w)        | Unbiased         | Better point queries    |
 
-This comprehensive comparison should help users understand the trade-offs and choose the right algorithm for their specific use case!
+This comparison should help users understand the trade-offs and choose the right algorithm for their specific use case. For measured throughput, memory, and multi-trial RMSE figures, see [docs/benchmarks.md](benchmarks.md).
 
 ---
 
-## Similarity Estimation (Not Yet Implemented)
+## Similarity estimation (not yet implemented)
 
 The following algorithms from Gakhov Ch. 6 are not yet implemented but are on the
 roadmap. They represent the largest missing problem domain in this library.
 
-### MinHash (Planned)
+### MinHash (planned)
 
 Estimates Jaccard similarity `J(A,B) = |A intersect B| / |A union B|` between two sets
 using k independent hash functions (or k permutations). Each set is represented by a
@@ -548,7 +565,7 @@ signature of k minimum hash values. Signature comparison approximates Jaccard si
 **Common uses:** Near-duplicate document detection, plagiarism detection, recommendation
 systems, clustering large document corpora.
 
-### SimHash (Planned)
+### SimHash (planned)
 
 Locality-sensitive hash that maps high-dimensional vectors to compact binary fingerprints.
 Similar inputs produce fingerprints with small Hamming distance. Based on random hyperplane
@@ -564,7 +581,7 @@ projections.
 **Common uses:** Web-scale deduplication (Google), content fingerprinting, near-duplicate
 image detection.
 
-### Locality-Sensitive Hashing Framework (Planned)
+### Locality-sensitive hashing framework (planned)
 
 LSH is a general framework for approximate nearest-neighbour search. It uses hash functions
 that map similar items to the same bucket with high probability. The "bands and rows"
