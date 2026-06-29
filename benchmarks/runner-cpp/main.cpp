@@ -314,7 +314,9 @@ Throughput timed_throughput_rounds(int rounds, int reps_per_round, uint64_t ops_
     round_samples.push_back(median(rates));
   }
   const double sd = population_stddev(round_samples);
-  auto [lo, hi] = bootstrap_ci(round_samples);
+  const std::pair<double, double> ci = bootstrap_ci(round_samples);
+  const double lo = ci.first;
+  const double hi = ci.second;
   const double med = median_copy(round_samples);
   return {med, sd, lo, hi};
 }
@@ -717,7 +719,9 @@ int main(int argc, char** argv) {
   {
     std::vector<double> samples = {100.0, 110.0, 90.0, 105.0, 95.0, 120.0,
                                    80.0, 115.0, 85.0, 100.0};
-    auto [lo, hi] = bootstrap_ci(samples);
+    const std::pair<double, double> ci = bootstrap_ci(samples);
+    const double lo = ci.first;
+    const double hi = ci.second;
     const double want_lo = 90.0;
     const double want_hi = 110.0;
     if (std::abs(lo - want_lo) > 1e-6 || std::abs(hi - want_hi) > 1e-6) {
