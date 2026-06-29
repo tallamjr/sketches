@@ -108,10 +108,10 @@ clears the parity line:
 
 ![Speedup vs Apache, real TPC-H strings](assets/benchmarks/speedup_vs_apache_tpch.png)
 
-The same lead in absolute time: a single HLL update takes roughly 1.8 ns with
-this library against 4.6 ns for Apache C++ (lower is better).
+The same lead in absolute time on that TPC-H column: a single HLL update takes
+roughly 7.7 ns with this library against 16.7 ns for Apache C++ (lower is better).
 
-![Latency per operation, synthetic integers](assets/benchmarks/latency.png)
+![Latency per operation, real TPC-H strings](assets/benchmarks/latency_tpch.png)
 
 **What we benchmark against.** The references are the official Apache
 implementations built and run locally: `apache/datasketches-cpp` at master
@@ -122,7 +122,7 @@ aborts if its measurement scaffolding is miscompiled. Throughput is the median
 over independent rounds with a 95% bootstrap confidence interval; accuracy is
 multi-trial RMSE.
 
-See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the reproduction steps, all plots, and the throughput and memory views.
+See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the reproduction steps, the synthetic-integer plots, and the throughput and memory views.
 
 ## Documentation
 
