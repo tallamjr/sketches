@@ -228,11 +228,8 @@ impl CountingBloomFilter {
         self.hash_positions_into(item, positions);
 
         for &pos in positions.iter() {
-            // SAFETY: pos = hash % num_bits < num_bits == counters.len().
-            debug_assert!(pos < self.counters.len());
-            let counter = unsafe { self.counters.get_unchecked_mut(pos) };
-            if *counter < self.max_count {
-                *counter += 1;
+            if pos < self.counters.len() && self.counters[pos] < self.max_count {
+                self.counters[pos] += 1;
             }
         }
     }
@@ -246,20 +243,15 @@ impl CountingBloomFilter {
 
         // Check if all positions have non-zero counts
         for &pos in positions.iter() {
-            // SAFETY: pos = hash % num_bits < num_bits == counters.len().
-            debug_assert!(pos < self.counters.len());
-            if unsafe { *self.counters.get_unchecked(pos) } == 0 {
+            if pos >= self.counters.len() || self.counters[pos] == 0 {
                 return false; // Item definitely not in filter
             }
         }
 
         // Decrement all counters
         for &pos in positions.iter() {
-            // SAFETY: pos = hash % num_bits < num_bits == counters.len().
-            debug_assert!(pos < self.counters.len());
-            let counter = unsafe { self.counters.get_unchecked_mut(pos) };
-            if *counter > 0 {
-                *counter -= 1;
+            if pos < self.counters.len() && self.counters[pos] > 0 {
+                self.counters[pos] -= 1;
             }
         }
 
@@ -274,9 +266,7 @@ impl CountingBloomFilter {
         self.hash_positions_into(item, positions);
 
         for &pos in positions.iter() {
-            // SAFETY: pos = hash % num_bits < num_bits == counters.len().
-            debug_assert!(pos < self.counters.len());
-            if unsafe { *self.counters.get_unchecked(pos) } == 0 {
+            if pos >= self.counters.len() || self.counters[pos] == 0 {
                 return false;
             }
         }
