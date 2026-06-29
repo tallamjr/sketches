@@ -98,13 +98,19 @@ on all five. On real TPC-H string columns the lead widens and we beat Apache C++
 on all five, Bloom included. On accuracy, HLL, Theta and CPC are at
 parity-or-better with Apache DataSketches by multi-trial RMSE.
 
-![Speedup vs Apache](assets/benchmarks/speedup_vs_apache.png)
+Speedup over Apache on a synthetic stream of sequential distinct integers (N = 1,000,000):
 
-In absolute terms, time per operation (lower is better): an HLL update is about 1.8 ns for us versus 4.6 ns for Apache C++.
+![Speedup vs Apache, synthetic integers](assets/benchmarks/speedup_vs_apache.png)
 
-![Latency per operation](assets/benchmarks/latency.png)
+On real TPC-H string data (the `c_address` column of a `customer` table, about 150k distinct strings, generated with [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs)) the lead widens and we beat Apache C++ on every sketch, Bloom included:
 
-**What we benchmark against.** The references are the official Apache implementations built and run locally: `apache/datasketches-cpp` at master `3.2.0-858-g0bab259` (2026-06-19), built with cmake/g++ at C++11, and the official Apache Rust `datasketches` crate. Each runner emits one shared CSV schema over identical datasets, and the C++ runner has a startup self-check that aborts if its measurement scaffolding is miscompiled. Throughput is the median over independent rounds with a 95% bootstrap confidence interval; accuracy is multi-trial RMSE. The current plots use a synthetic stream (sequential distinct integers); the harness also supports real TPC-H columns.
+![Speedup vs Apache, real TPC-H strings](assets/benchmarks/speedup_vs_apache_tpch.png)
+
+In absolute terms, time per operation on the synthetic stream (lower is better): an HLL update is about 1.8 ns for us versus 4.6 ns for Apache C++.
+
+![Latency per operation, synthetic integers](assets/benchmarks/latency.png)
+
+**What we benchmark against.** The references are the official Apache implementations built and run locally: `apache/datasketches-cpp` at master `3.2.0-858-g0bab259` (2026-06-19), built with cmake/g++ at C++11, and the official Apache Rust `datasketches` crate. Each runner emits one shared CSV schema over identical datasets, and the C++ runner has a startup self-check that aborts if its measurement scaffolding is miscompiled. Throughput is the median over independent rounds with a 95% bootstrap confidence interval; accuracy is multi-trial RMSE.
 
 See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the reproduction steps, all plots, and the throughput and memory views.
 
