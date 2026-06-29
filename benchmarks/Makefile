@@ -17,7 +17,7 @@ PLOTS := $(RESULTS)/plots
 RMSE_TRIALS ?= 100
 RMSE_N ?= 100000
 
-.PHONY: ours apache-rust cpp python report memory gate rmse baseline compare clean
+.PHONY: ours apache-rust cpp python report memory gate rmse baseline compare clean asm
 
 ours:
 	cd runner-ours && cargo run --release -- --n $(N) --reps $(REPS) --out ../$(RESULTS)/ours.csv
@@ -85,3 +85,10 @@ compare: ours
 clean:
 	rm -f $(RESULTS)/*.csv
 	rm -rf $(PLOTS)
+
+# Emit release assembly for the sketches crate so the hash hot path can be
+# inspected. Output lands in target/release/deps/*.s; grep for the hash symbol.
+asm:
+	cd .. && cargo rustc --release --lib -- --emit asm
+	@echo "assembly emitted under ../target/release/deps/*.s"
+	@echo "inspect e.g.: grep -n 'xxh3\\|murmur' ../target/release/deps/sketches-*.s | head"
