@@ -130,3 +130,9 @@ HLL estimate: 98559344.17
 This example will typically show tens of megabytes for the Python set versus
 just a few kilobytes for the HLL sketch, showcasing the memory efficiency of
 probabilistic data structures.
+
+## Further reading
+
+- Andrii Gakhov. *Probabilistic Data Structures and Algorithms for Big Data Applications*. 1st edition, BoD, 2019. ISBN 978-3-7481-9048-6. A thorough, accessible treatment of the families implemented here (membership, cardinality, frequency, and rank/quantile sketches), and a reference text used to cross-check the algorithms in this library.
+- Flajolet, Fusy, Gandouet, Meunier. "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm." 2007.
+- Cormode, Muthukrishnan. "An Improved Data Stream Summary: The Count-Min Sketch and its Applications." Journal of Algorithms, 2005.
