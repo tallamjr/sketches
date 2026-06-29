@@ -270,6 +270,57 @@ def render_table(rows):
     return "\n".join(lines) + "\n"
 
 
+def separation(median_a, lo_a, hi_a, median_b, lo_b, hi_b):
+    """Verdict on whether measurement B differs from A beyond noise.
+
+    'separated' iff the two 95% bootstrap CIs are disjoint; otherwise
+    'within noise'. ratio is candidate-over-baseline (median_b / median_a).
+    """
+    disjoint = hi_a < lo_b or hi_b < lo_a
+    verdict = "separated" if disjoint else "within noise"
+    ratio = median_b / median_a if median_a else float("nan")
+    return verdict, ratio
+
+
+def render_compare(baseline_rows, candidate_rows):
+    """Markdown table: per (sketch,dataset,op,implementation), baseline vs
+    candidate throughput median, the speedup ratio, and the separation verdict.
+    """
+    def index(rows):
+        out = {}
+        for r in rows:
+            key = (r["sketch"], r["dataset"], r["op"], r["implementation"])
+            out[key] = r
+        return out
+
+    base = index(baseline_rows)
+    cand = index(candidate_rows)
+    columns = ["plane (sketch/dataset/op) [impl]", "baseline tput",
+               "candidate tput", "ratio (cand/base)", "verdict"]
+    lines = ["| " + " | ".join(columns) + " |",
+             "| " + " | ".join("---" for _ in columns) + " |"]
+    for key in sorted(set(base) & set(cand)):
+        b = base[key]
+        c = cand[key]
+        bm = _as_float(b["throughput_median_ops_per_s"])
+        cm = _as_float(c["throughput_median_ops_per_s"])
+        verdict, ratio = separation(
+            bm, _as_float(b["throughput_ci_low"]), _as_float(b["throughput_ci_high"]),
+            cm, _as_float(c["throughput_ci_low"]), _as_float(c["throughput_ci_high"]),
+        )
+        plane = "/".join(key[:3]) + f" [{key[3]}]"
+        lines.append("| " + " | ".join([
+            plane, f"{bm:.3g}", f"{cm:.3g}", f"{ratio:.3f}", verdict,
+        ]) + " |")
+    lines.append("")
+    lines.append("**Notes**")
+    lines.append("")
+    lines.append("> 'separated' means the 95% bootstrap CIs are disjoint, so the "
+                 "throughput change clears measurement noise; 'within noise' means "
+                 "it does not and must not be claimed as a real change.")
+    return "\n".join(lines) + "\n"
+
+
 def check_accuracy(rows, thresholds):
     """Gate `ours` relative errors against per-sketch thresholds.
 
@@ -463,12 +514,24 @@ def _build_parser():
         metavar="THRESHOLDS_JSON",
         help="run the accuracy gate using per-sketch thresholds from this JSON",
     )
+    parser.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("BASELINE", "CANDIDATE"),
+        help="compare two result CSVs and print the per-plane separation verdict",
+    )
     return parser
 
 
 def main(argv=None):
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.compare:
+        base_rows = load_rows([args.compare[0]])
+        cand_rows = load_rows([args.compare[1]])
+        sys.stdout.write(render_compare(base_rows, cand_rows))
+        return 0
 
     if args.rmse:
         rmse_rows = load_rmse_rows(args.rmse)

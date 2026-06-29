@@ -290,3 +290,31 @@ def test_font_family_resolves_to_tahoma():
     # Tahoma is installed in this environment, so importing plots (which calls
     # _apply_tahoma at import time) must resolve the family to Tahoma.
     assert plots.plt.rcParams["font.family"] == ["Tahoma"]
+
+
+def test_separation_disjoint_intervals():
+    v, ratio = report.separation(100.0, 95.0, 105.0, 130.0, 125.0, 135.0)
+    assert v == "separated"
+    assert abs(ratio - 1.3) < 1e-9
+
+
+def test_separation_overlapping_intervals():
+    v, _ = report.separation(100.0, 90.0, 110.0, 108.0, 100.0, 116.0)
+    assert v == "within noise"
+
+
+def test_render_compare_table(tmp_path):
+    base = _write_csv(
+        tmp_path, "base.csv",
+        ["ours,hll,synthetic,update,1000,10,5000000,45000,4900000,5100000,128,2048,1010,1000,0.01"],
+    )
+    cand = _write_csv(
+        tmp_path, "cand.csv",
+        ["ours,hll,synthetic,update,1000,10,5600000,45000,5500000,5700000,128,2048,1010,1000,0.01"],
+    )
+    base_rows = report.load_rows([base])
+    cand_rows = report.load_rows([cand])
+    table = report.render_compare(base_rows, cand_rows)
+    assert "hll/synthetic/update" in table
+    assert "separated" in table        # CIs [4.9M,5.1M] vs [5.5M,5.7M] disjoint
+    assert "1.120" in table            # 5.6M / 5.0M speedup
