@@ -40,7 +40,3 @@ harness = false
 extension-module = ["pyo3"]
 # Do not enable extension-module by default; enable explicitly for Python builds
 default = []
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
