@@ -95,8 +95,8 @@ Probability (HIP) estimator: an incremental accumulator updated each time a regi
 rank increases, falling back to a composite estimator when updates arrive out of order
 (for example after a merge), with the HIP state persisted through serialisation. HIP is
 what takes HLL below the `1/sqrt(k)` floor. Measured over 100 trials of 100,000 distinct
-items at `lg_k = 12`, this moved HLL RMSE from 0.0175 (pre-HIP) to 0.0122, slightly
-better than Apache DataSketches (0.0129) and below the 0.0156 floor. See
+items at `lg_k = 12`, this moved HLL RMSE from 0.0175 (pre-HIP) to 0.0122, parity with
+Apache DataSketches (0.0129, both below the 0.0156 floor). See
 [docs/benchmarks.md](benchmarks.md) for the full multi-trial RMSE table.
 
 #### HyperLogLog++ (advanced)
@@ -218,7 +218,7 @@ fn compute_next_skip() {
 - **Time Complexity**: O(1) amortized, much fewer random calls
 - **Random Calls**: Uses geometric distribution to determine how many items to skip
 - **Optimization**: Skips items without random generation, processes in batches
-- **Performance**: ~19x faster for large datasets in our implementation
+- **Performance**: much faster than Algorithm R for large datasets (Vitter's published result for the skip-based variant)
 
 **The key insight**: Instead of asking "should I replace this item?" for every single item, Algorithm A asks "how many items should I skip before the next potential replacement?" This dramatically reduces expensive random number generations.
 
@@ -514,7 +514,7 @@ fn update(&mut self, item: &str) {
 | **Small Cardinalities**    | Linear Counter → HLL      | Better accuracy for n < 1000, auto-transition       |
 | **Set Operations**         | Theta Sketch              | Only algorithm supporting union/intersection        |
 | **Compressed Storage**     | CPC                       | Smallest serialized size, good for network transfer |
-| **Uniform Sampling**       | Algorithm A               | 19x faster than Algorithm R for large streams       |
+| **Uniform Sampling**       | Algorithm A               | Skips items probabilistically (Vitter), faster than R for large streams |
 | **Weighted Sampling**      | A-Res                     | Correct probability-proportional sampling           |
 | **Quantiles (Streaming)**  | T-Digest                  | Better for extreme quantiles (p95, p99)             |
 | **Quantiles (Merging)**    | KLL Sketch                | Exact merge with provable error bounds              |
@@ -533,7 +533,7 @@ fn update(&mut self, item: &str) {
 | **CPC**            | O(1) average   | Minimal       | RMSE 0.0089 at lg_k=12 | Best compression, ICON+HIP |
 | **Linear Counter** | O(1)           | O(m)          | <1% for small n  | Exact for small sets    |
 | **Algorithm R**    | O(1)           | O(k)          | Exact            | Simple uniform sampling |
-| **Algorithm A**    | O(1)           | O(k)          | Exact            | 19x faster than R       |
+| **Algorithm A**    | O(1)           | O(k)          | Exact            | Skips items (Vitter), faster than R |
 | **T-Digest**       | O(log C)       | O(C)          | <1%              | Great for extremes      |
 | **KLL**            | O(log n)       | O(k log n)    | ±ε provable      | Exact merging           |
 | **Bloom Filter**   | O(h)           | O(m)          | p false positive | No false negatives      |

@@ -209,6 +209,12 @@ pub struct CountingBloomFilter {
 impl CountingBloomFilter {
     /// Create a new counting Bloom filter
     pub fn new(capacity: usize, error_rate: f64, max_count: u8) -> Self {
+        assert!(capacity > 0, "Capacity must be greater than 0");
+        assert!(
+            error_rate > 0.0 && error_rate < 1.0,
+            "Error rate must be between 0 and 1"
+        );
+
         let num_bits = BloomFilter::calculate_num_bits(capacity, error_rate);
         let num_hash_functions = BloomFilter::calculate_num_hash_functions(num_bits, capacity);
 

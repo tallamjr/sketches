@@ -19,6 +19,8 @@
 #[cfg(feature = "extension-module")]
 use pyo3::PyObject;
 #[cfg(feature = "extension-module")]
+use pyo3::exceptions::PyValueError;
+#[cfg(feature = "extension-module")]
 use pyo3::prelude::*;
 #[cfg(feature = "extension-module")]
 use pyo3::types::PyBytes;
@@ -57,10 +59,17 @@ pub struct CpcSketch {
 impl CpcSketch {
     /// Create a new CPC sketch with log2(k) specified by `lg_k`. Defaults to 11.
     #[new]
-    fn new(lg_k: Option<u8>) -> Self {
-        CpcSketch {
-            inner: cpc::CpcSketch::new(lg_k.unwrap_or(11)),
+    #[pyo3(signature = (lg_k=None))]
+    fn new(lg_k: Option<u8>) -> PyResult<Self> {
+        let lg_k = lg_k.unwrap_or(11);
+        if !(4..=26).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=26, got {lg_k}"
+            )));
         }
+        Ok(CpcSketch {
+            inner: cpc::CpcSketch::new(lg_k),
+        })
     }
 
     /// Update the sketch with a string item.
@@ -98,10 +107,17 @@ pub struct HllSketch {
 impl HllSketch {
     /// Create a new HLL sketch with precision `lg_k`. Defaults to 12.
     #[new]
-    fn new(lg_k: Option<u8>) -> Self {
-        HllSketch {
-            inner: hll::HllSketch::new(lg_k.unwrap_or(12)),
+    #[pyo3(signature = (lg_k=None))]
+    fn new(lg_k: Option<u8>) -> PyResult<Self> {
+        let lg_k = lg_k.unwrap_or(12);
+        if !(4..=18).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=18, got {lg_k}"
+            )));
         }
+        Ok(HllSketch {
+            inner: hll::HllSketch::new(lg_k),
+        })
     }
 
     /// Update the sketch with a string item.
@@ -117,8 +133,9 @@ impl HllSketch {
 
     /// Merge another HLL sketch into this one (in-place union).
     pub fn merge(&mut self, other: &HllSketch) -> PyResult<()> {
-        self.inner.merge(&other.inner);
-        Ok(())
+        self.inner
+            .merge(&other.inner)
+            .map_err(PyValueError::new_err)
     }
 
     /// Serialize the sketch to bytes.
@@ -139,10 +156,17 @@ pub struct HllPlusPlusSketch {
 impl HllPlusPlusSketch {
     /// Create a new HLL++ sketch with precision `lg_k`. Defaults to 12.
     #[new]
-    fn new(lg_k: Option<u8>) -> Self {
-        HllPlusPlusSketch {
-            inner: hll::HllPlusPlusSketch::new(lg_k.unwrap_or(12)),
+    #[pyo3(signature = (lg_k=None))]
+    fn new(lg_k: Option<u8>) -> PyResult<Self> {
+        let lg_k = lg_k.unwrap_or(12);
+        if !(4..=18).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=18, got {lg_k}"
+            )));
         }
+        Ok(HllPlusPlusSketch {
+            inner: hll::HllPlusPlusSketch::new(lg_k),
+        })
     }
 
     /// Update the sketch with a string item.
@@ -158,8 +182,9 @@ impl HllPlusPlusSketch {
 
     /// Merge another HLL++ sketch into this one (in-place union).
     pub fn merge(&mut self, other: &HllPlusPlusSketch) -> PyResult<()> {
-        self.inner.merge(&other.inner);
-        Ok(())
+        self.inner
+            .merge(&other.inner)
+            .map_err(PyValueError::new_err)
     }
 
     /// Serialize the sketch to bytes.
@@ -180,10 +205,17 @@ pub struct HllPlusPlusSparseSketch {
 impl HllPlusPlusSparseSketch {
     /// Create a new sparse HLL++ sketch with precision `lg_k`. Defaults to 12.
     #[new]
-    fn new(lg_k: Option<u8>) -> Self {
-        HllPlusPlusSparseSketch {
-            inner: hll::HllPlusPlusSparseSketch::new(lg_k.unwrap_or(12)),
+    #[pyo3(signature = (lg_k=None))]
+    fn new(lg_k: Option<u8>) -> PyResult<Self> {
+        let lg_k = lg_k.unwrap_or(12);
+        if !(4..=18).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=18, got {lg_k}"
+            )));
         }
+        Ok(HllPlusPlusSparseSketch {
+            inner: hll::HllPlusPlusSparseSketch::new(lg_k),
+        })
     }
 
     /// Update the sketch with a string item.
@@ -199,8 +231,9 @@ impl HllPlusPlusSparseSketch {
 
     /// Merge another sparse sketch into this one (in-place union).
     pub fn merge(&mut self, other: &HllPlusPlusSparseSketch) -> PyResult<()> {
-        self.inner.merge(&other.inner);
-        Ok(())
+        self.inner
+            .merge(&other.inner)
+            .map_err(PyValueError::new_err)
     }
 
     /// Serialize the sketch to bytes.
@@ -277,10 +310,20 @@ pub struct BloomFilter {
 impl BloomFilter {
     /// Create a new Bloom filter with specified capacity and error rate.
     #[new]
-    fn new(capacity: usize, error_rate: Option<f64>) -> Self {
-        BloomFilter {
-            inner: bloom::BloomFilter::new(capacity, error_rate.unwrap_or(0.01)),
+    #[pyo3(signature = (capacity, error_rate=None))]
+    fn new(capacity: usize, error_rate: Option<f64>) -> PyResult<Self> {
+        let error_rate = error_rate.unwrap_or(0.01);
+        if capacity == 0 {
+            return Err(PyValueError::new_err("capacity must be greater than 0"));
         }
+        if !(error_rate > 0.0 && error_rate < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "error_rate must be in (0, 1), got {error_rate}"
+            )));
+        }
+        Ok(BloomFilter {
+            inner: bloom::BloomFilter::new(capacity, error_rate),
+        })
     }
 
     /// Add an element to the filter.
@@ -343,14 +386,20 @@ pub struct CountingBloomFilter {
 impl CountingBloomFilter {
     /// Create a new counting Bloom filter.
     #[new]
-    fn new(capacity: usize, error_rate: Option<f64>, max_count: Option<u8>) -> Self {
-        CountingBloomFilter {
-            inner: bloom::CountingBloomFilter::new(
-                capacity,
-                error_rate.unwrap_or(0.01),
-                max_count.unwrap_or(255),
-            ),
+    #[pyo3(signature = (capacity, error_rate=None, max_count=None))]
+    fn new(capacity: usize, error_rate: Option<f64>, max_count: Option<u8>) -> PyResult<Self> {
+        let error_rate = error_rate.unwrap_or(0.01);
+        if capacity == 0 {
+            return Err(PyValueError::new_err("capacity must be greater than 0"));
         }
+        if !(error_rate > 0.0 && error_rate < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "error_rate must be in (0, 1), got {error_rate}"
+            )));
+        }
+        Ok(CountingBloomFilter {
+            inner: bloom::CountingBloomFilter::new(capacity, error_rate, max_count.unwrap_or(255)),
+        })
     }
 
     /// Add an element to the filter.
@@ -382,26 +431,47 @@ pub struct CountMinSketch {
 impl CountMinSketch {
     /// Create a new Count-Min sketch with specified dimensions.
     #[new]
-    fn new(width: usize, depth: usize, conservative_update: Option<bool>) -> Self {
-        CountMinSketch {
+    #[pyo3(signature = (width, depth, conservative_update=None))]
+    fn new(width: usize, depth: usize, conservative_update: Option<bool>) -> PyResult<Self> {
+        if width == 0 || depth == 0 {
+            return Err(PyValueError::new_err(
+                "width and depth must both be greater than 0",
+            ));
+        }
+        Ok(CountMinSketch {
             inner: countmin::CountMinSketch::new(
                 width,
                 depth,
                 conservative_update.unwrap_or(false),
             ),
-        }
+        })
     }
 
     /// Create a Count-Min sketch with error bounds.
     #[staticmethod]
-    fn with_error_bounds(epsilon: f64, delta: f64, conservative_update: Option<bool>) -> Self {
-        CountMinSketch {
+    #[pyo3(signature = (epsilon, delta, conservative_update=None))]
+    fn with_error_bounds(
+        epsilon: f64,
+        delta: f64,
+        conservative_update: Option<bool>,
+    ) -> PyResult<Self> {
+        if !(epsilon > 0.0 && epsilon < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "epsilon must be in (0, 1), got {epsilon}"
+            )));
+        }
+        if !(delta > 0.0 && delta < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "delta must be in (0, 1), got {delta}"
+            )));
+        }
+        Ok(CountMinSketch {
             inner: countmin::CountMinSketch::with_error_bounds(
                 epsilon,
                 delta,
                 conservative_update.unwrap_or(false),
             ),
-        }
+        })
     }
 
     /// Update the count for an item.
@@ -483,10 +553,15 @@ pub struct CountSketch {
 impl CountSketch {
     /// Create a new Count sketch.
     #[new]
-    fn new(width: usize, depth: usize) -> Self {
-        CountSketch {
-            inner: countmin::CountSketch::new(width, depth),
+    fn new(width: usize, depth: usize) -> PyResult<Self> {
+        if width == 0 || depth == 0 {
+            return Err(PyValueError::new_err(
+                "width and depth must both be greater than 0",
+            ));
         }
+        Ok(CountSketch {
+            inner: countmin::CountSketch::new(width, depth),
+        })
     }
 
     /// Update the count for an item.
@@ -513,10 +588,17 @@ pub struct KllSketch {
 impl KllSketch {
     /// Create a new KLL sketch with parameter k.
     #[new]
-    fn new(k: Option<usize>) -> Self {
-        KllSketch {
-            inner: quantiles::KllSketch::new(k.unwrap_or(200)),
+    #[pyo3(signature = (k=None))]
+    fn new(k: Option<usize>) -> PyResult<Self> {
+        let k = k.unwrap_or(200);
+        if k < 8 {
+            return Err(PyValueError::new_err(format!(
+                "k must be at least 8, got {k}"
+            )));
         }
+        Ok(KllSketch {
+            inner: quantiles::KllSketch::new(k),
+        })
     }
 
     /// Create a KLL sketch with specified accuracy.
@@ -625,21 +707,34 @@ pub struct LinearCounter {
 impl LinearCounter {
     /// Create a new Linear Counter.
     #[new]
-    fn new(num_bits: usize) -> Self {
-        LinearCounter {
-            inner: linear::LinearCounter::new(num_bits),
+    fn new(num_bits: usize) -> PyResult<Self> {
+        if num_bits == 0 {
+            return Err(PyValueError::new_err("num_bits must be greater than 0"));
         }
+        Ok(LinearCounter {
+            inner: linear::LinearCounter::new(num_bits),
+        })
     }
 
     /// Create a Linear Counter with optimal size for expected cardinality.
     #[staticmethod]
-    fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> Self {
-        LinearCounter {
+    fn with_expected_cardinality(expected_cardinality: usize, error_rate: f64) -> PyResult<Self> {
+        if expected_cardinality == 0 {
+            return Err(PyValueError::new_err(
+                "expected_cardinality must be greater than 0",
+            ));
+        }
+        if !(error_rate > 0.0 && error_rate < 1.0) {
+            return Err(PyValueError::new_err(format!(
+                "error_rate must be in (0, 1), got {error_rate}"
+            )));
+        }
+        Ok(LinearCounter {
             inner: linear::LinearCounter::with_expected_cardinality(
                 expected_cardinality,
                 error_rate,
             ),
-        }
+        })
     }
 
     /// Update the counter with a new item.
@@ -712,10 +807,20 @@ pub struct HybridCounter {
 impl HybridCounter {
     /// Create a new Hybrid Counter.
     #[new]
-    fn new(linear_bits: usize, lg_k: u8, transition_threshold: usize) -> Self {
-        HybridCounter {
-            inner: linear::HybridCounter::new(linear_bits, lg_k, transition_threshold),
+    fn new(linear_bits: usize, lg_k: u8, transition_threshold: usize) -> PyResult<Self> {
+        if linear_bits == 0 {
+            return Err(PyValueError::new_err("linear_bits must be greater than 0"));
         }
+        // lg_k drives the HLL stage that is created when the counter transitions;
+        // an out-of-range value would panic at that later transition.
+        if !(4..=21).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=21, got {lg_k}"
+            )));
+        }
+        Ok(HybridCounter {
+            inner: linear::HybridCounter::new(linear_bits, lg_k, transition_threshold),
+        })
     }
 
     /// Create with optimal parameters for expected cardinality range.
@@ -1355,13 +1460,18 @@ impl AodSketch {
     /// Create a new AOD sketch with default parameters.
     #[new]
     #[pyo3(signature = (capacity=None, num_values=None))]
-    fn new(capacity: Option<usize>, num_values: Option<usize>) -> Self {
-        AodSketch {
-            inner: aod::AodSketch::with_capacity_and_values(
-                capacity.unwrap_or(4096),
-                num_values.unwrap_or(1),
-            ),
+    fn new(capacity: Option<usize>, num_values: Option<usize>) -> PyResult<Self> {
+        let capacity = capacity.unwrap_or(4096);
+        let num_values = num_values.unwrap_or(1);
+        if capacity == 0 {
+            return Err(PyValueError::new_err("capacity must be greater than 0"));
         }
+        if num_values == 0 {
+            return Err(PyValueError::new_err("num_values must be greater than 0"));
+        }
+        Ok(AodSketch {
+            inner: aod::AodSketch::with_capacity_and_values(capacity, num_values),
+        })
     }
 
     /// Update the sketch with a key and array of values.
@@ -1501,7 +1611,13 @@ impl ReqSketch {
     /// Create a new REQ sketch.
     /// mode: "HRA" for High Rank Accuracy, "LRA" for Low Rank Accuracy.
     #[new]
+    #[pyo3(signature = (k, mode=None))]
     fn new(k: usize, mode: Option<&str>) -> PyResult<Self> {
+        if k < 4 {
+            return Err(PyValueError::new_err(format!(
+                "k must be at least 4, got {k}"
+            )));
+        }
         let req_mode = match mode.unwrap_or("HRA") {
             "HRA" => req::ReqMode::HRA,
             "LRA" => req::ReqMode::LRA,
@@ -1602,10 +1718,13 @@ pub struct PyVarOptSketch {
 impl PyVarOptSketch {
     /// Create a new VarOpt sketch.
     #[new]
-    fn new(k: usize) -> Self {
-        PyVarOptSketch {
-            inner: varopt::VarOptSketch::new(k),
+    fn new(k: usize) -> PyResult<Self> {
+        if k == 0 {
+            return Err(PyValueError::new_err("k must be at least 1"));
         }
+        Ok(PyVarOptSketch {
+            inner: varopt::VarOptSketch::new(k),
+        })
     }
 
     /// Update with item and weight.
@@ -1649,10 +1768,17 @@ pub struct PyHllSketchMode {
 #[pymethods]
 impl PyHllSketchMode {
     #[new]
-    fn new(lg_k: Option<u8>) -> Self {
-        PyHllSketchMode {
-            inner: hll::HllSketchMode::new(lg_k.unwrap_or(12)),
+    #[pyo3(signature = (lg_k=None))]
+    fn new(lg_k: Option<u8>) -> PyResult<Self> {
+        let lg_k = lg_k.unwrap_or(12);
+        if !(4..=21).contains(&lg_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_k must be in 4..=21, got {lg_k}"
+            )));
         }
+        Ok(PyHllSketchMode {
+            inner: hll::HllSketchMode::new(lg_k),
+        })
     }
 
     pub fn update(&mut self, item: &str) -> PyResult<()> {
@@ -1688,10 +1814,17 @@ pub struct PyHllUnion {
 #[pymethods]
 impl PyHllUnion {
     #[new]
-    fn new(lg_max_k: Option<u8>) -> Self {
-        PyHllUnion {
-            inner: hll::HllUnion::new(lg_max_k.unwrap_or(12)),
+    #[pyo3(signature = (lg_max_k=None))]
+    fn new(lg_max_k: Option<u8>) -> PyResult<Self> {
+        let lg_max_k = lg_max_k.unwrap_or(12);
+        if !(4..=21).contains(&lg_max_k) {
+            return Err(PyValueError::new_err(format!(
+                "lg_max_k must be in 4..=21, got {lg_max_k}"
+            )));
         }
+        Ok(PyHllUnion {
+            inner: hll::HllUnion::new(lg_max_k),
+        })
     }
 
     pub fn update(&mut self, item: &str) -> PyResult<()> {

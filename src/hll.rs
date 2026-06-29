@@ -117,12 +117,12 @@ impl<H: SketchHasher> HllSketchGeneric<H> {
     }
 
     /// Merge another sketch into this one (in-place union).
-    pub fn merge(&mut self, other: &Self) {
+    ///
+    /// Returns an error when the two sketches have different precision and so
+    /// cannot be merged.
+    pub fn merge(&mut self, other: &Self) -> Result<(), &'static str> {
         if self.p != other.p {
-            panic!(
-                "Cannot merge HLL sketches with different precision: {} vs {}",
-                self.p, other.p
-            );
+            return Err("cannot merge HLL sketches with different precision");
         }
 
         // A merge breaks the in-order assumption HIP relies on, so invalidate it
@@ -134,6 +134,7 @@ impl<H: SketchHasher> HllSketchGeneric<H> {
                 self.registers[i] = other.registers[i];
             }
         }
+        Ok(())
     }
 
     /// Serialize registers to bytes.
@@ -299,17 +300,20 @@ impl HllPlusPlusSketch {
     }
 
     /// Merge another HLL++ sketch into this one (in-place union).
-    pub fn merge(&mut self, other: &HllPlusPlusSketch) {
-        assert_eq!(
-            self.p, other.p,
-            "Cannot merge sketches with different precision"
-        );
+    ///
+    /// Returns an error when the two sketches have different precision and so
+    /// cannot be merged.
+    pub fn merge(&mut self, other: &HllPlusPlusSketch) -> Result<(), &'static str> {
+        if self.p != other.p {
+            return Err("cannot merge HLL++ sketches with different precision");
+        }
 
         for (r, o) in self.registers.iter_mut().zip(other.registers.iter()) {
             if *r < *o {
                 *r = *o;
             }
         }
+        Ok(())
     }
 
     /// Batch update the sketch with multiple items.
@@ -421,11 +425,13 @@ impl HllPlusPlusSparseSketch {
     }
 
     /// Merge another sparse sketch into this one.
-    pub fn merge(&mut self, other: &HllPlusPlusSparseSketch) {
-        assert_eq!(
-            self.p, other.p,
-            "Cannot merge sketches with different precision"
-        );
+    ///
+    /// Returns an error when the two sketches have different precision and so
+    /// cannot be merged.
+    pub fn merge(&mut self, other: &HllPlusPlusSparseSketch) -> Result<(), &'static str> {
+        if self.p != other.p {
+            return Err("cannot merge sparse HLL++ sketches with different precision");
+        }
 
         for (&idx, &r) in other.map.iter() {
             let entry = self.map.entry(idx).or_insert(0);
@@ -433,6 +439,7 @@ impl HllPlusPlusSparseSketch {
                 *entry = r;
             }
         }
+        Ok(())
     }
 
     /// Serialize to dense byte vector.
@@ -589,7 +596,10 @@ impl AdaptiveHllPlusPlus {
                 }
 
                 if let HllRepresentation::Dense(dense) = &mut self.representation {
-                    dense.merge(&other_dense);
+                    // Precision was verified equal by the assert_eq above.
+                    dense
+                        .merge(&other_dense)
+                        .expect("precision verified equal above");
                 }
                 return;
             }
@@ -600,7 +610,10 @@ impl AdaptiveHllPlusPlus {
         if let (HllRepresentation::Dense(self_dense), HllRepresentation::Dense(other_dense)) =
             (&mut self.representation, &other.representation)
         {
-            self_dense.merge(other_dense);
+            // Precision was verified equal by the assert_eq above.
+            self_dense
+                .merge(other_dense)
+                .expect("precision verified equal above");
         }
     }
 
