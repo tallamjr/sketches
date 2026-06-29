@@ -130,6 +130,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the repro
 - [Design and architecture](docs/design.md)
 - [Benchmarks](docs/benchmarks.md)
 - [Algorithm deep dive](docs/algorithms.md)
+- [Comparison and prior art](docs/comparison.md)
 
 ## Roadmap
 
