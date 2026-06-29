@@ -52,6 +52,24 @@ IMPL_ORDER = [
 ]
 
 
+# Pastel, role-based bar colours. Each implementation keeps the same hue across
+# every plot so the eye tracks it; the palette is muted so it reads on a
+# transparent background under either a light or dark page.
+_IMPL_COLORS = {
+    "ours": "#7aa6c2",         # muted blue
+    "ours-murmur3": "#b3a2c7", # lavender
+    "apache-rust": "#e8998d",  # coral
+    "apache-cpp": "#88c0a3",   # teal-green
+    "apache": "#d9c97e",       # soft gold (Python plane)
+}
+_FALLBACK_COLORS = ["#c9b8a8", "#9ec4b8", "#c7a9bd", "#b8c19a"]
+
+
+def _color_for(impl, idx=0):
+    """Stable pastel colour for an implementation, falling back by index."""
+    return _IMPL_COLORS.get(impl, _FALLBACK_COLORS[idx % len(_FALLBACK_COLORS)])
+
+
 def _ordered_impls(rows):
     """Implementations present in `rows`, in the preferred display order.
 
@@ -178,7 +196,7 @@ def _grouped_bar(
         positions = [i + offset * bar_width for i in indices]
         if any(v is not None for v in series[impl]):
             plotted_any = True
-        bar_kwargs = {"label": impl}
+        bar_kwargs = {"label": impl, "color": _color_for(impl, offset)}
         if yerr_field is not None:
             # Missing/None stddev counts as zero error for that bar.
             bar_kwargs["yerr"] = [e if e is not None else 0.0 for e in errors[impl]]
@@ -238,7 +256,7 @@ def render_rmse_plot(rows, out_dir):
     for offset, impl in enumerate(IMPLEMENTATIONS):
         heights = [v if v is not None else 0.0 for v in series[impl]]
         positions = [i + offset * bar_width for i in indices]
-        ax.bar(positions, heights, bar_width, label=impl)
+        ax.bar(positions, heights, bar_width, label=impl, color=_color_for(impl, offset))
 
     centre = (n_impls - 1) * bar_width / 2.0
     ax.set_xticks([i + centre for i in indices])
@@ -354,14 +372,14 @@ def render_speedup_plot(rows, out_dir):
         [v if v is not None else 0.0 for v in cpp_ratios],
         bar_width,
         label="vs apache-cpp",
-        color="#4c72b0",
+        color=_color_for("apache-cpp"),
     )
     ax.bar(
         [i + 1 * bar_width for i in indices],
         [v if v is not None else 0.0 for v in rust_ratios],
         bar_width,
         label="vs apache-rust",
-        color="#dd8452",
+        color=_color_for("apache-rust"),
     )
 
     ax.axhline(1.0, linestyle="--", color="black", label="parity")
@@ -432,7 +450,7 @@ def render_latency_plot(rows, out_dir):
     for offset, impl in enumerate(impls):
         heights = [v if v is not None else 0.0 for v in series[impl]]
         positions = [i + offset * bar_width for i in indices]
-        ax.bar(positions, heights, bar_width, label=impl)
+        ax.bar(positions, heights, bar_width, label=impl, color=_color_for(impl, offset))
 
     centre = (n_impls - 1) * bar_width / 2.0
     ax.set_xticks([i + centre for i in indices])

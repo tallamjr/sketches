@@ -93,9 +93,10 @@ Different problems call for different sketches. Use this guide to pick the right
 ## Performance
 
 At N = 1,000,000 our xxh3-backed default beats hand-tuned Apache C++ on four of
-the five shared sketches and beats the Apache Rust crate on all five. On
-accuracy, HLL, Theta and CPC are at parity-or-better with Apache DataSketches by
-multi-trial RMSE.
+the five shared sketches (Bloom within about 6%) and beats the Apache Rust crate
+on all five. On real TPC-H string columns the lead widens and we beat Apache C++
+on all five, Bloom included. On accuracy, HLL, Theta and CPC are at
+parity-or-better with Apache DataSketches by multi-trial RMSE.
 
 ![Speedup vs Apache](assets/benchmarks/speedup_vs_apache.png)
 

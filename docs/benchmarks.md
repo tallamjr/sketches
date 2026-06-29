@@ -56,6 +56,26 @@ Per-sketch live heap (the build-and-hold working footprint, measured by a counti
 
 ![Live memory by sketch and implementation](../assets/benchmarks/memory.png)
 
+### Real data: TPC-H string columns
+
+The plots above use a synthetic stream of sequential distinct integers. To check the picture on realistic, variable-length string keys, the same three planes were run over the `c_address` column of a TPC-H `customer` table (about 150,000 distinct strings, generated with [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs)).
+
+On this string workload our default beats hand-tuned Apache C++ on **all five** sketches, including Bloom (which trails by a hair on synthetic integers):
+
+| Sketch   | Ours vs Apache C++ | Ours vs Apache Rust |
+| -------- | ------------------ | ------------------- |
+| CountMin | 2.66x ahead        | 4.06x ahead         |
+| HLL      | 2.16x ahead        | 3.85x ahead         |
+| Theta    | 1.74x ahead        | 2.79x ahead         |
+| Bloom    | 1.62x ahead        | 4.37x ahead         |
+| CPC      | 1.53x ahead        | 2.21x ahead         |
+
+![Throughput on TPC-H customer.c_address](../assets/benchmarks/throughput_tpch.png)
+
+![Speedup vs Apache on TPC-H customer.c_address](../assets/benchmarks/speedup_vs_apache_tpch.png)
+
+The gap widens on strings because xxh3's per-call lead over MurmurHash3 grows with key length (about 5x at 64 bytes versus 2.86x at 8 bytes), and that advantage now covers Apache C++'s blocked-Bloom loop edge that kept it ahead on the synthetic integer case.
+
 ### Benchmark harness
 
 The `benchmarks/` directory contains everything needed to reproduce the numbers above:
