@@ -1,7 +1,9 @@
 """Shared timing + memory protocol for the Python benchmark plane.
 
-Mirrors the Rust runners: one untimed warmup pass, then R timed reps, reporting
-median and population stddev of per-rep throughput; per-object heap delta via
+Mirrors the Rust runners: R independent rounds, each one untimed warmup pass
+then REPS_PER_ROUND timed reps (the round-sample is the median of those reps);
+report the median over round-samples, their population stddev, and a
+deterministic nonparametric 95% bootstrap CI; per-object heap delta via
 tracemalloc.
 """
 import math

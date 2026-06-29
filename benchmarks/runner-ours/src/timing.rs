@@ -1,5 +1,7 @@
-//! Shared throughput protocol: one untimed warmup pass, then R timed reps;
-//! report median and population stddev of per-rep throughput (ops/s).
+//! Shared throughput protocol: R independent rounds, each one untimed warmup
+//! pass then REPS_PER_ROUND timed reps (the round-sample is the median of those
+//! reps). Report the median over round-samples, their population stddev, and a
+//! deterministic nonparametric 95% bootstrap CI (ops/s).
 
 use std::time::Instant;
 

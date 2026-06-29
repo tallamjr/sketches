@@ -1,9 +1,10 @@
 """Python benchmark plane: our maturin wheel vs the pip `datasketches` package.
 
 Mirrors the Rust runners (runner-ours, runner-apache-rust): a fresh sketch is
-built and fully populated each timed rep, one untimed warmup pass precedes the
-timed reps, and per-object heap is measured via tracemalloc. Each perf-core
-sketch is emitted as one CSV row using the shared 15-column schema.
+built and fully populated each timed rep, the timing runs R independent rounds
+(each one untimed warmup pass then REPS_PER_ROUND timed reps), and per-object
+heap is measured via tracemalloc. Each sketch is emitted as one CSV row using
+the shared 15-column schema.
 
 Run with `--impl ours` to measure the wheel (module `sketches`) or
 `--impl apache` to measure the pip `datasketches` package. A missing whole
