@@ -1,0 +1,4 @@
+implementation,sketch,lg_k,trials,n_per_trial,rmse,mean_rel_error,max_rel_error
+ours,theta,12,100,100000,0.015291,0.011976,0.040460
+ours,hll,12,100,100000,0.012151,0.009781,0.029815
+ours,cpc,12,100,100000,0.008900,0.007283,0.024826

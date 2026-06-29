@@ -1,0 +1,4 @@
+implementation,sketch,lg_k,trials,n_per_trial,rmse,mean_rel_error,max_rel_error
+apache-rust,theta,12,100,100000,0.014379,0.011814,0.032504
+apache-rust,hll,12,100,100000,0.012944,0.010447,0.033266
+apache-rust,cpc,12,100,100000,0.008398,0.006864,0.017672
