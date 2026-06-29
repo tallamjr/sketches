@@ -27,7 +27,8 @@
 //!   Information Processing Letters, 2006.
 
 use crate::serialization::{
-    FAMILY_RESERVOIR_A, FAMILY_RESERVOIR_R, FAMILY_STREAM_SAMPLER, Serializable, SerializationError,
+    FAMILY_RESERVOIR_A, FAMILY_RESERVOIR_R, FAMILY_STREAM_SAMPLER, FAMILY_WEIGHTED_RESERVOIR,
+    Serializable, SerializationError,
 };
 use rand::prelude::*;
 use rand::rngs::ThreadRng;
@@ -423,6 +424,26 @@ impl<T: Clone + Serialize + DeserializeOwned> Serializable for ReservoirSamplerA
 
     fn family_id(&self) -> u8 {
         FAMILY_RESERVOIR_A
+    }
+
+    fn serial_version(&self) -> u8 {
+        SAMPLING_SERIAL_VERSION
+    }
+}
+
+impl<T: Clone + Serialize + DeserializeOwned> Serializable for WeightedReservoirSampler<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("WeightedReservoirSampler decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_WEIGHTED_RESERVOIR
     }
 
     fn serial_version(&self) -> u8 {

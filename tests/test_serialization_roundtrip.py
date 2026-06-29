@@ -138,6 +138,43 @@ def build_stream_sampler():
     return s
 
 
+def build_hll_sparse():
+    s = ds.HllPlusPlusSparseSketch(12)
+    for x in _items(500):
+        s.update(x)
+    return s
+
+
+def build_hll_union():
+    s = ds.HllUnion(12)
+    for x in _items(2000):
+        s.update(x)
+    return s
+
+
+def build_streaming_tdigest():
+    s = ds.StreamingTDigest(100, 256)
+    for i in range(5000):
+        s.add(float(i))
+    return s
+
+
+def build_weighted_reservoir():
+    s = ds.WeightedReservoirSampler(50)
+    for i in range(2000):
+        s.add_weighted(f"item-{i}", 1.0 + (i % 7))
+    return s
+
+
+def sig_weighted_reservoir(s):
+    return (
+        "weighted",
+        tuple(sorted(s.sample())),
+        round(s.total_weight(), 6),
+        s.capacity(),
+    )
+
+
 def build_bloom():
     s = ds.BloomFilter(2000, 0.01)
     for x in _items(1000):
@@ -258,6 +295,22 @@ CASES = [
     ("CountingBloomFilter", ds.CountingBloomFilter, build_counting_bloom, sig_bloom, 0.0),
     ("CountMinSketch", ds.CountMinSketch, build_countmin, sig_countmin, 0.0),
     ("CountSketch", ds.CountSketch, build_count_sketch, sig_count_sketch, 0.0),
+    (
+        "HllPlusPlusSparseSketch",
+        ds.HllPlusPlusSparseSketch,
+        build_hll_sparse,
+        sig_cardinality,
+        0.0,
+    ),
+    ("HllUnion", ds.HllUnion, build_hll_union, sig_cardinality, 0.0),
+    ("StreamingTDigest", ds.StreamingTDigest, build_streaming_tdigest, sig_tdigest, 0.0),
+    (
+        "WeightedReservoirSampler",
+        ds.WeightedReservoirSampler,
+        build_weighted_reservoir,
+        sig_weighted_reservoir,
+        0.0,
+    ),
 ]
 
 
@@ -292,6 +345,10 @@ def test_pickle_roundtrip(name, cls, builder, sig, tol):
         ds.CountingBloomFilter,
         ds.CountMinSketch,
         ds.CountSketch,
+        ds.HllPlusPlusSparseSketch,
+        ds.HllUnion,
+        ds.StreamingTDigest,
+        ds.WeightedReservoirSampler,
     ],
 )
 def test_from_bytes_garbage_raises_value_error(cls):

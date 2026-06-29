@@ -25,6 +25,12 @@ use std::collections::BTreeMap;
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
+use crate::serialization::{FAMILY_HLL_SPARSE, FAMILY_HLL_UNION, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
+
+/// Serial format versions for the sparse HLL++ sketch and HLL union postcard payloads.
+const HLL_SPARSE_SERIAL_VERSION: u8 = 1;
+const HLL_UNION_SERIAL_VERSION: u8 = 1;
 
 /// HyperLogLog Sketch for approximate distinct counting.
 ///
@@ -361,6 +367,7 @@ impl HllPlusPlusSketch {
 }
 
 /// Sparse HyperLogLog++ sketch storing only non-zero registers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HllPlusPlusSparseSketch {
     p: u8,
     m: usize,
@@ -442,8 +449,12 @@ impl HllPlusPlusSparseSketch {
         Ok(())
     }
 
-    /// Serialize to dense byte vector.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    /// Expand the sparse map into a dense register vector of length m.
+    ///
+    /// This is the in-memory register view used when transitioning to a dense
+    /// representation. It is not the serialised form; round-trippable
+    /// serialisation is provided by the `Serializable` implementation.
+    pub fn to_dense_registers(&self) -> Vec<u8> {
         let mut regs = vec![0; self.m];
         for (&idx, &r) in self.map.iter() {
             regs[idx] = r;
@@ -456,6 +467,26 @@ impl HllPlusPlusSparseSketch {
         // BTreeMap overhead: ~24-32 bytes per entry + data
         self.map.len() * (std::mem::size_of::<usize>() + std::mem::size_of::<u8>() + 24)
             + std::mem::size_of::<Self>()
+    }
+}
+
+impl Serializable for HllPlusPlusSparseSketch {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("HllPlusPlusSparseSketch decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_HLL_SPARSE
+    }
+
+    fn serial_version(&self) -> u8 {
+        HLL_SPARSE_SERIAL_VERSION
     }
 }
 
@@ -555,7 +586,7 @@ impl AdaptiveHllPlusPlus {
             let mut dense = HllPlusPlusSketch::new(self.p);
 
             // Copy all register values from sparse to dense
-            let sparse_bytes = sparse.to_bytes();
+            let sparse_bytes = sparse.to_dense_registers();
             for (idx, &value) in sparse_bytes.iter().enumerate() {
                 if value > 0 {
                     dense.registers[idx] = value;
@@ -617,10 +648,10 @@ impl AdaptiveHllPlusPlus {
         }
     }
 
-    /// Serialize to bytes.
+    /// Serialize to a dense register byte vector.
     pub fn to_bytes(&self) -> Vec<u8> {
         match &self.representation {
-            HllRepresentation::Sparse(sparse) => sparse.to_bytes(),
+            HllRepresentation::Sparse(sparse) => sparse.to_dense_registers(),
             HllRepresentation::Dense(dense) => dense.to_bytes(),
         }
     }
@@ -1305,6 +1336,107 @@ impl HllUnion {
     }
 }
 
+/// Serialisable snapshot of the gadget held inside an `HllUnion`.
+///
+/// `HllSketchMode` is not itself serde-aware, so the union captures the gadget's
+/// observable state directly. List and Set modes are stored as their coupon set
+/// (which fully determines the estimate and can be replayed exactly); HLL mode
+/// stores the registers and HIP estimator state for an exact reconstruction.
+#[derive(Serialize, Deserialize)]
+enum HllUnionGadgetSnapshot {
+    List {
+        coupons: Vec<u32>,
+    },
+    Set {
+        coupons: Vec<u32>,
+    },
+    Hll {
+        lg_k: u8,
+        registers: Vec<u8>,
+        hip_accum: f64,
+        kxq0: f64,
+        kxq1: f64,
+        out_of_order: bool,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+struct HllUnionSnapshot {
+    lg_max_k: u8,
+    gadget_lg_k: u8,
+    gadget: HllUnionGadgetSnapshot,
+}
+
+impl Serializable for HllUnion {
+    fn to_bytes(&self) -> Vec<u8> {
+        let gadget = match &self.gadget.mode {
+            SketchMode::List(list) => HllUnionGadgetSnapshot::List {
+                coupons: list.coupons.clone(),
+            },
+            SketchMode::Set(set) => HllUnionGadgetSnapshot::Set {
+                coupons: set.iter_coupons().collect(),
+            },
+            SketchMode::Hll(hll) => {
+                let (hip_accum, kxq0, kxq1, out_of_order) = hll.hip.raw_state();
+                HllUnionGadgetSnapshot::Hll {
+                    lg_k: hll.lg_k,
+                    registers: hll.registers.clone(),
+                    hip_accum,
+                    kxq0,
+                    kxq1,
+                    out_of_order,
+                }
+            }
+        };
+        let snapshot = HllUnionSnapshot {
+            lg_max_k: self.lg_max_k,
+            gadget_lg_k: self.gadget.lg_k,
+            gadget,
+        };
+        postcard::to_allocvec(&snapshot).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        let snapshot: HllUnionSnapshot = postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("HllUnion decode failed: {e}")))?;
+        let mut gadget = HllSketchMode::new(snapshot.gadget_lg_k);
+        gadget.mode = match snapshot.gadget {
+            HllUnionGadgetSnapshot::List { coupons } => SketchMode::List(ListMode { coupons }),
+            HllUnionGadgetSnapshot::Set { coupons } => {
+                let mut set = SetMode::new();
+                for coupon in coupons {
+                    set.insert(coupon);
+                }
+                SketchMode::Set(set)
+            }
+            HllUnionGadgetSnapshot::Hll {
+                lg_k,
+                registers,
+                hip_accum,
+                kxq0,
+                kxq1,
+                out_of_order,
+            } => SketchMode::Hll(HllMode {
+                lg_k,
+                registers,
+                hip: HipEstimator::from_raw(hip_accum, kxq0, kxq1, out_of_order),
+            }),
+        };
+        Ok(HllUnion {
+            lg_max_k: snapshot.lg_max_k,
+            gadget,
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_HLL_UNION
+    }
+
+    fn serial_version(&self) -> u8 {
+        HLL_UNION_SERIAL_VERSION
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1355,7 +1487,7 @@ mod tests {
             sd.update(&v);
             ss.update(&v);
         }
-        assert_eq!(sd.to_bytes(), ss.to_bytes());
+        assert_eq!(sd.to_bytes(), ss.to_dense_registers());
     }
 
     #[test]

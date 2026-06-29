@@ -291,7 +291,24 @@ impl HllPlusPlusSparseSketch {
 
     /// Serialize the sketch to bytes.
     pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
-        PyBytes::new(py, &self.inner.to_bytes()).into()
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <hll::HllPlusPlusSparseSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(HllPlusPlusSparseSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
@@ -1466,6 +1483,28 @@ impl WeightedReservoirSampler {
         self.inner.clear();
         Ok(())
     }
+
+    /// Serialize the sampler to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sampler from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <sampling::WeightedReservoirSampler<String> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(WeightedReservoirSampler { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Stream Sampler.
@@ -1783,6 +1822,28 @@ impl StreamingTDigest {
 
     pub fn p99(&mut self) -> Option<f64> {
         self.quantile(0.99)
+    }
+
+    /// Serialize the digest to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the digest from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <tdigest::StreamingTDigest as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(StreamingTDigest { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
@@ -2253,6 +2314,28 @@ impl PyHllUnion {
 
     pub fn estimate(&self) -> f64 {
         self.inner.estimate()
+    }
+
+    /// Serialize the union to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the union from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <hll::HllUnion as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyHllUnion { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
