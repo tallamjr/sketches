@@ -113,11 +113,9 @@ impl<H: SketchHasher> BloomFilterGeneric<H> {
         for &pos in positions {
             let chunk_index = pos / 64;
             let bit_index = pos % 64;
-            // SAFETY: every pos is `hash % num_bits`, so pos < num_bits and
-            // chunk_index = pos/64 < num_bits.div_ceil(64) = bit_array.len().
-            debug_assert!(chunk_index < self.bit_array.len());
-            unsafe {
-                *self.bit_array.get_unchecked_mut(chunk_index) |= 1u64 << bit_index;
+
+            if chunk_index < self.bit_array.len() {
+                self.bit_array[chunk_index] |= 1u64 << bit_index;
             }
         }
     }
@@ -127,10 +125,12 @@ impl<H: SketchHasher> BloomFilterGeneric<H> {
         for &pos in positions {
             let chunk_index = pos / 64;
             let bit_index = pos % 64;
-            // SAFETY: every pos is `hash % num_bits`, so pos < num_bits and
-            // chunk_index = pos/64 < num_bits.div_ceil(64) = bit_array.len().
-            debug_assert!(chunk_index < self.bit_array.len());
-            if (unsafe { *self.bit_array.get_unchecked(chunk_index) } & (1u64 << bit_index)) == 0 {
+
+            if chunk_index >= self.bit_array.len() {
+                return false;
+            }
+
+            if (self.bit_array[chunk_index] & (1u64 << bit_index)) == 0 {
                 return false;
             }
         }
