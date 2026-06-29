@@ -321,6 +321,29 @@ def render_compare(baseline_rows, candidate_rows):
     return "\n".join(lines) + "\n"
 
 
+def noise_warnings(rows, frac=0.05):
+    """Return human-readable warnings for measurements whose 95% CI half-width
+    exceeds `frac` of the median throughput (the signal is too noisy to trust;
+    re-run on a quiet machine). Only rows with all three throughput fields set
+    are considered.
+    """
+    out = []
+    for r in rows:
+        median = _as_float(r.get("throughput_median_ops_per_s"))
+        lo = _as_float(r.get("throughput_ci_low"))
+        hi = _as_float(r.get("throughput_ci_high"))
+        if median is None or lo is None or hi is None or median <= 0:
+            continue
+        half_width = (hi - lo) / 2.0
+        if half_width > frac * median:
+            pct = 100.0 * half_width / median
+            out.append(
+                f"NOISY {r['implementation']}/{r['sketch']}/{r['dataset']}/"
+                f"{r['op']}: CI half-width {pct:.1f}% > {frac*100:.0f}%; re-run"
+            )
+    return out
+
+
 def check_accuracy(rows, thresholds):
     """Gate `ours` relative errors against per-sketch thresholds.
 
@@ -569,6 +592,8 @@ def main(argv=None):
 
     table = render_table(rows)
     sys.stdout.write(table)
+    for w in noise_warnings(rows):
+        print(w, file=sys.stderr)
     if args.md:
         os.makedirs(os.path.dirname(os.path.abspath(args.md)), exist_ok=True)
         with open(args.md, "w") as handle:

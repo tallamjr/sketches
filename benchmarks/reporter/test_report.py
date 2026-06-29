@@ -318,3 +318,19 @@ def test_render_compare_table(tmp_path):
     assert "hll/synthetic/update" in table
     assert "separated" in table        # CIs [4.9M,5.1M] vs [5.5M,5.7M] disjoint
     assert "1.120" in table            # 5.6M / 5.0M speedup
+
+
+def test_noise_warnings_flags_wide_ci(tmp_path):
+    rows = report.load_rows([_write_csv(
+        tmp_path, "noisy.csv",
+        [
+            # half-width (5.2M-4.8M)/2 = 0.2M = 4% of 5M -> OK
+            "ours,hll,synthetic,update,1000,10,5000000,1,4800000,5200000,128,2048,1010,1000,0.01",
+            # half-width (7M-3M)/2 = 2M = 40% of 5M -> flagged
+            "ours,theta,synthetic,update,1000,10,5000000,1,3000000,7000000,128,2048,1010,1000,0.01",
+        ],
+    )])
+    warnings = report.noise_warnings(rows, frac=0.05)
+    joined = " ".join(warnings)
+    assert "theta" in joined
+    assert "hll" not in joined

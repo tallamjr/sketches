@@ -17,7 +17,7 @@ PLOTS := $(RESULTS)/plots
 RMSE_TRIALS ?= 100
 RMSE_N ?= 100000
 
-.PHONY: ours apache-rust cpp python report memory gate rmse clean
+.PHONY: ours apache-rust cpp python report memory gate rmse baseline compare clean
 
 ours:
 	cd runner-ours && cargo run --release -- --n $(N) --reps $(REPS) --out ../$(RESULTS)/ours.csv
@@ -68,6 +68,19 @@ rmse:
 	cmake --build runner-cpp/build
 	runner-cpp/build/runner_cpp --trials $(RMSE_TRIALS) --n $(RMSE_N) --out $(RESULTS)/rmse_apache-cpp.csv
 	$(PYTHON) $(REPORTER)/report.py --rmse $(RESULTS)/rmse_*.csv
+
+# Snapshot the current `ours` result CSV as the committed baseline that future
+# `make compare` runs are checked against.
+baseline: ours
+	cp $(RESULTS)/ours.csv $(RESULTS)/baseline-ours.csv
+	@echo "baseline snapshot written to $(RESULTS)/baseline-ours.csv"
+
+# Re-run `ours`, then print the per-plane separation verdict against the
+# committed baseline. Errors if no baseline has been snapshotted yet.
+compare: ours
+	@if [ ! -f $(RESULTS)/baseline-ours.csv ]; then \
+		echo "no baseline; run 'make baseline' first" >&2; exit 1; fi
+	$(PYTHON) $(REPORTER)/report.py --compare $(RESULTS)/baseline-ours.csv $(RESULTS)/ours.csv
 
 clean:
 	rm -f $(RESULTS)/*.csv

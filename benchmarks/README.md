@@ -60,19 +60,51 @@ CountMin) are hash-based, so each gets a `ours-murmur3` row in addition to its
 
 ## Timing protocol
 
-Throughput is measured with a fixed protocol shared by every runner:
+Throughput is measured with a fixed protocol shared by every runner. The unit
+of measurement is the round, and `REPS` now controls the number of independent
+rounds (default `REPS = 30`):
 
-- One untimed warmup pass runs the build/update loop first, to settle caches
-  and absorb any one-off allocation.
-- Then `R` timed repetitions run, default `R = 30`, each individually timed.
-- Per-rep throughput is `ops_per_rep / elapsed_secs`.
-- The reported `throughput_median_ops_per_s` is the median of the per-rep
-  rates, and `throughput_stddev` is their population standard deviation.
+- Each round runs one untimed warmup pass of the build/update loop (to settle
+  caches and absorb one-off allocation), then `REPS_PER_ROUND = 5` timed reps.
+- Per-rep throughput is `ops_per_rep / elapsed_secs`; the round's sample is the
+  median of its five timed reps.
+- This yields `REPS` round-samples. The reported
+  `throughput_median_ops_per_s` is the median of those round-samples, and
+  `throughput_stddev` is their population standard deviation.
+- `throughput_ci_low` and `throughput_ci_high` bound a deterministic 95%
+  bootstrap confidence interval over the round-samples: the bootstrap is
+  resampled with a fixed seed, so the same inputs always produce the same
+  interval and the CI is reproducible across runs.
 
-The median is preferred over the mean so an occasional slow rep (scheduler
+The median is preferred over the mean so an occasional slow round (scheduler
 preemption, GC, page fault) does not dominate the figure. The throughput plots
 carry the `throughput_stddev` as error bars, so run-to-run variance is visible
-in the plot.
+in the plot, and the bootstrap CI is what the separation verdict and the noise
+warning (below) are computed from.
+
+### Quiet-machine checklist
+
+The CI is only as trustworthy as the machine it was measured on. Before taking
+a measurement seriously, settle the host:
+
+- Run on AC power, not battery (CPU governors throttle aggressively on battery).
+- Close other applications, especially browsers, compilers, and anything doing
+  background indexing or sync.
+- Run a single benchmark at a time; do not run two planes (or a build) in
+  parallel with a timing run.
+- Let the machine reach a steady thermal state; avoid measuring immediately
+  after a heavy build.
+
+### macOS pinning limitation
+
+macOS exposes no `sched_setaffinity` and no `taskset`, so the runners cannot
+pin a benchmark to a fixed core. Without core pinning the OS may migrate the
+timing thread between cores mid-run, which adds variance. The harness
+compensates by measuring many rounds, reporting the bootstrap CI, and emitting
+a noise warning: when a measurement's 95% CI half-width exceeds 5% of its
+median, the reporter prints a `NOISY .../...: re-run` line to stderr. Treat any
+flagged measurement as untrustworthy and re-run it on a quiet machine before
+drawing a conclusion from it.
 
 ## Memory: `live_bytes` versus `bytes`
 
@@ -109,8 +141,8 @@ Each plane measures `live_bytes` with the mechanism native to its runtime:
 ## Running
 
 All targets run from the repo root via `make -C benchmarks <target>`. Two knobs
-apply to most targets: `N` (stream size, default 1000000) and `REPS` (timed
-reps, default 30).
+apply to most targets: `N` (stream size, default 1000000) and `REPS`
+(independent timing rounds, default 30; see the timing protocol below).
 
 Run the planes and produce the report and plots:
 
@@ -130,6 +162,26 @@ protocol; controlled by `RMSE_TRIALS` and `RMSE_N`):
 ```
 make -C benchmarks rmse
 ```
+
+### Baseline and compare gate
+
+To check whether a change moved throughput beyond measurement noise, snapshot a
+baseline before the change and compare against it after:
+
+```
+make -C benchmarks baseline   # run ours, snapshot results/ours.csv -> results/baseline-ours.csv
+# ... make your change ...
+make -C benchmarks compare     # re-run ours, print the per-plane separation verdict vs the baseline
+```
+
+`compare` runs `ours` again, then prints a per-plane table giving the
+baseline-to-candidate throughput ratio and a separation verdict for each plane.
+The verdict reads `separated` only when the two 95% bootstrap CIs are disjoint,
+so the change cleared measurement noise; otherwise it reads `within noise` and
+the change must not be claimed as a real speedup. `compare` errors if no
+baseline has been snapshotted yet (run `make baseline` first). Before trusting
+either run, follow the quiet-machine checklist above and re-run any measurement
+the reporter flags `NOISY`.
 
 ### Python plane prerequisites
 
