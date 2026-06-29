@@ -3,7 +3,7 @@
 Mirrors the Rust runners (runner-ours, runner-apache-rust): a fresh sketch is
 built and fully populated each timed rep, one untimed warmup pass precedes the
 timed reps, and per-object heap is measured via tracemalloc. Each perf-core
-sketch is emitted as one CSV row using the shared 13-column schema.
+sketch is emitted as one CSV row using the shared 15-column schema.
 
 Run with `--impl ours` to measure the wheel (module `sketches`) or
 `--impl apache` to measure the pip `datasketches` package. A missing whole
@@ -40,9 +40,9 @@ def fmt(value):
     return f"{value:.6f}"
 
 
-def make_row(impl, sketch, dataset, op, n, reps, median, stddev,
+def make_row(impl, sketch, dataset, op, n, reps, median, stddev, ci_low, ci_high,
              nbytes, live_bytes, estimate, exact, rel_error):
-    """Assemble one CSV line in the 13-column HEADER order."""
+    """Assemble one CSV line in the 15-column HEADER order."""
     return ",".join([
         impl,
         sketch,
@@ -52,6 +52,8 @@ def make_row(impl, sketch, dataset, op, n, reps, median, stddev,
         str(reps),
         f"{median:.6f}",
         f"{stddev:.6f}",
+        f"{ci_low:.6f}",
+        f"{ci_high:.6f}",
         "" if nbytes is None else str(nbytes),
         "" if live_bytes is None else str(live_bytes),
         fmt(estimate),
@@ -69,23 +71,26 @@ def make_row(impl, sketch, dataset, op, n, reps, median, stddev,
 
 def distinct_count_row(impl, sketch_name, keys, n, exact, reps, build, estimate_of, bytes_of):
     """Generic distinct-counter row (HLL, Theta, CPC). op = distinct_count."""
-    median, stddev = bc.timed_throughput(reps, True, n, build)
+    median, stddev, ci_low, ci_high = bc.timed_throughput_rounds(
+        reps, bc.REPS_PER_ROUND, n, build)
     obj, live = bc.measure_live(build)
     estimate = estimate_of(obj)
     rel_error = abs(estimate - exact) / exact
     nbytes = bytes_of(obj)
     return make_row(impl, sketch_name, "synthetic", "distinct_count", n, reps,
-                    median, stddev, nbytes, live, estimate, exact, rel_error)
+                    median, stddev, ci_low, ci_high, nbytes, live, estimate,
+                    exact, rel_error)
 
 
 def bloom_row(impl, keys, n, reps, build, bytes_of):
     """Bloom build row. A membership filter has no cardinality estimate, so
     estimate/exact/rel_error are left empty. op = build."""
-    median, stddev = bc.timed_throughput(reps, True, n, build)
+    median, stddev, ci_low, ci_high = bc.timed_throughput_rounds(
+        reps, bc.REPS_PER_ROUND, n, build)
     obj, live = bc.measure_live(build)
     nbytes = bytes_of(obj)
     return make_row(impl, "bloom", "synthetic", "build", n, reps,
-                    median, stddev, nbytes, live, None, None, None)
+                    median, stddev, ci_low, ci_high, nbytes, live, None, None, None)
 
 
 def countmin_row(impl, keys, n, reps, build, estimate_hot, bytes_of):
@@ -93,27 +98,31 @@ def countmin_row(impl, keys, n, reps, build, estimate_hot, bytes_of):
     HOT_KEY_COUNT times; the hot key is queried. op = point_query,
     n = N + HOT_KEY_COUNT, exact = HOT_KEY_COUNT."""
     total_ops = n + HOT_KEY_COUNT
-    median, stddev = bc.timed_throughput(reps, True, total_ops, build)
+    median, stddev, ci_low, ci_high = bc.timed_throughput_rounds(
+        reps, bc.REPS_PER_ROUND, total_ops, build)
     obj, live = bc.measure_live(build)
     estimate = float(estimate_hot(obj))
     exact = float(HOT_KEY_COUNT)
     rel_error = abs(estimate - exact) / exact
     nbytes = bytes_of(obj)
     return make_row(impl, "countmin", "synthetic", "point_query", total_ops,
-                    reps, median, stddev, nbytes, live, estimate, exact, rel_error)
+                    reps, median, stddev, ci_low, ci_high, nbytes, live,
+                    estimate, exact, rel_error)
 
 
 def kll_row(impl, n, reps, build, median_of, bytes_of):
     """KLL median row over the numeric range 0..n. The exact median is n/2.
     op = quantile_median."""
-    median, stddev = bc.timed_throughput(reps, True, n, build)
+    median, stddev, ci_low, ci_high = bc.timed_throughput_rounds(
+        reps, bc.REPS_PER_ROUND, n, build)
     obj, live = bc.measure_live(build)
     estimate = median_of(obj)
     exact = n / 2.0
     rel_error = abs(estimate - exact) / exact
     nbytes = bytes_of(obj)
     return make_row(impl, "kll", "synthetic", "quantile_median", n, reps,
-                    median, stddev, nbytes, live, estimate, exact, rel_error)
+                    median, stddev, ci_low, ci_high, nbytes, live, estimate,
+                    exact, rel_error)
 
 
 # --------------------------------------------------------------------------
