@@ -218,6 +218,22 @@ def test_render_speedup_plot(tmp_path):
     assert os.path.basename(path) == "speedup_vs_apache.png"
 
 
+def test_render_latency_plot(tmp_path):
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,distinct_count,1000,20,500000000,1,490000000,510000000,4096,4096,1000,1000,0.01",
+            "apache-cpp,hll,synthetic,distinct_count,1000,20,200000000,1,196000000,204000000,4192,4192,1000,1000,0.01",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    path = plots.render_latency_plot(rows, str(tmp_path))
+    assert path.endswith("latency.png")
+    import os
+    assert os.path.exists(path) and os.path.getsize(path) > 0
+
+
 def test_plots_render_with_error_bars(tmp_path):
     # Two implementations for one sketch, each with a throughput median and a
     # stddev plus a live_bytes footprint. The throughput plot must draw stddev

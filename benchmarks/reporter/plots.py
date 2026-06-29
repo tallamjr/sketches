@@ -351,6 +351,73 @@ def render_speedup_plot(rows, out_dir):
     return out_path
 
 
+def render_latency_plot(rows, out_dir):
+    """Write latency.png: time per operation (ns/op), the lower-is-better twin.
+
+    Rows are grouped by (sketch, dataset, op). For each group, every
+    implementation present contributes one bar at
+    ``ns_per_op = 1e9 / throughput_median_ops_per_s`` (skipped when the
+    throughput is missing or zero). Grouped bars with distinct colours, one
+    cluster per group, no parity line (this is absolute time). Returns the
+    written path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    impls = _ordered_impls(rows)
+
+    groups = {}
+    order = []
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        groups[key][row["implementation"]] = row
+
+    labels = []
+    series = {impl: [] for impl in impls}
+    for key in order:
+        impl_rows = groups[key]
+        values = {}
+        for impl in impls:
+            r = impl_rows.get(impl)
+            tput = _as_float(r["throughput_median_ops_per_s"]) if r else None
+            if tput is None or tput == 0.0:
+                values[impl] = None
+            else:
+                values[impl] = 1e9 / tput
+        if all(v is None for v in values.values()):
+            continue
+        sample = next(iter(impl_rows.values()))
+        labels.append(_label(sample))
+        for impl in impls:
+            series[impl].append(values[impl])
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.6 * len(labels) + 2.0), 4.5))
+
+    n_groups = len(labels)
+    n_impls = len(impls)
+    bar_width = 0.8 / n_impls
+    indices = list(range(n_groups))
+
+    for offset, impl in enumerate(impls):
+        heights = [v if v is not None else 0.0 for v in series[impl]]
+        positions = [i + offset * bar_width for i in indices]
+        ax.bar(positions, heights, bar_width, label=impl)
+
+    centre = (n_impls - 1) * bar_width / 2.0
+    ax.set_xticks([i + centre for i in indices])
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("ns / op")
+    ax.set_title("Latency per operation (ns/op, lower is better)")
+    ax.legend()
+
+    out_path = os.path.join(out_dir, "latency.png")
+    fig.savefig(out_path, dpi=_SAVE_DPI, transparent=True, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
 def render_plots(rows, out_dir):
     """Write throughput, memory and accuracy PNGs into out_dir.
 
