@@ -25,6 +25,10 @@
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
 
+/// Maximum number of hash positions handled on the stack per operation. Real
+/// configurations use k of roughly 7; this cap is far above any practical k.
+const MAX_HASHES: usize = 64;
+
 /// Standard Bloom Filter implementation, generic over the hash backend.
 pub struct BloomFilterGeneric<H: SketchHasher> {
     bit_array: Vec<u64>,
@@ -77,29 +81,31 @@ impl<H: SketchHasher> BloomFilterGeneric<H> {
 
     /// Add an element to the filter
     pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
-        let hashes = self.hash_item(item);
-        self.set_bits_scalar(&hashes);
+        debug_assert!(self.num_hash_functions <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let positions = &mut buf[..self.num_hash_functions];
+        self.hash_positions_into(item, positions);
+        self.set_bits_scalar(positions);
     }
 
     /// Check if an element might be in the filter
     pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
-        let hashes = self.hash_item(item);
-        self.check_bits_scalar(&hashes)
+        debug_assert!(self.num_hash_functions <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let positions = &mut buf[..self.num_hash_functions];
+        self.hash_positions_into(item, positions);
+        self.check_bits_scalar(positions)
     }
 
-    /// Generate hash values for an item using double hashing with xxh3
-    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+    /// Fill `out[..num_hash_functions]` with this item's bit positions using
+    /// double hashing with xxh3. `out` must be at least `num_hash_functions` long.
+    fn hash_positions_into<T: Hashable + ?Sized>(&self, item: &T, out: &mut [usize]) {
         let hash1 = hash64_of(&H::default(), item, DEFAULT_SEED);
         let hash2 = hash64_of(&H::default(), item, 0x517cc1b727220a95);
-
-        // Use double hashing to generate multiple hash functions
-        let mut hashes = Vec::with_capacity(self.num_hash_functions);
-        for i in 0..self.num_hash_functions {
+        for (i, slot) in out.iter_mut().enumerate().take(self.num_hash_functions) {
             let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-            hashes.push((hash as usize) % self.num_bits);
+            *slot = (hash as usize) % self.num_bits;
         }
-
-        hashes
     }
 
     /// Set bits using scalar operations
@@ -216,9 +222,12 @@ impl CountingBloomFilter {
 
     /// Add an element to the filter
     pub fn add<T: Hashable + ?Sized>(&mut self, item: &T) {
-        let hashes = self.hash_item(item);
+        debug_assert!(self.num_hash_functions <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let positions = &mut buf[..self.num_hash_functions];
+        self.hash_positions_into(item, positions);
 
-        for &pos in &hashes {
+        for &pos in positions.iter() {
             if pos < self.counters.len() && self.counters[pos] < self.max_count {
                 self.counters[pos] += 1;
             }
@@ -227,17 +236,20 @@ impl CountingBloomFilter {
 
     /// Remove an element from the filter
     pub fn remove<T: Hashable + ?Sized>(&mut self, item: &T) -> bool {
-        let hashes = self.hash_item(item);
+        debug_assert!(self.num_hash_functions <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let positions = &mut buf[..self.num_hash_functions];
+        self.hash_positions_into(item, positions);
 
         // Check if all positions have non-zero counts
-        for &pos in &hashes {
+        for &pos in positions.iter() {
             if pos >= self.counters.len() || self.counters[pos] == 0 {
                 return false; // Item definitely not in filter
             }
         }
 
         // Decrement all counters
-        for &pos in &hashes {
+        for &pos in positions.iter() {
             if pos < self.counters.len() && self.counters[pos] > 0 {
                 self.counters[pos] -= 1;
             }
@@ -248,9 +260,12 @@ impl CountingBloomFilter {
 
     /// Check if an element might be in the filter
     pub fn contains<T: Hashable + ?Sized>(&self, item: &T) -> bool {
-        let hashes = self.hash_item(item);
+        debug_assert!(self.num_hash_functions <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let positions = &mut buf[..self.num_hash_functions];
+        self.hash_positions_into(item, positions);
 
-        for &pos in &hashes {
+        for &pos in positions.iter() {
             if pos >= self.counters.len() || self.counters[pos] == 0 {
                 return false;
             }
@@ -258,18 +273,15 @@ impl CountingBloomFilter {
         true
     }
 
-    /// Generate hash values for an item using double hashing with xxh3
-    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
+    /// Fill `out[..num_hash_functions]` with this item's bit positions using
+    /// double hashing with xxh3. `out` must be at least `num_hash_functions` long.
+    fn hash_positions_into<T: Hashable + ?Sized>(&self, item: &T, out: &mut [usize]) {
         let hash1 = hash64_of(&Xxh3Hasher, item, DEFAULT_SEED);
         let hash2 = hash64_of(&Xxh3Hasher, item, 0x517cc1b727220a95);
-
-        let mut hashes = Vec::with_capacity(self.num_hash_functions);
-        for i in 0..self.num_hash_functions {
+        for (i, slot) in out.iter_mut().enumerate().take(self.num_hash_functions) {
             let hash = hash1.wrapping_add((i as u64).wrapping_mul(hash2));
-            hashes.push((hash as usize) % self.num_bits);
+            *slot = (hash as usize) % self.num_bits;
         }
-
-        hashes
     }
 }
 
