@@ -42,7 +42,7 @@ Throughput is now measured on a stabilised harness: each figure is the median ov
 
 ![Speedup vs Apache by sketch](../assets/benchmarks/speedup_vs_apache.png)
 
-The win is driven by the hash. xxh3 is about 2.86x faster per call than the MurmurHash3 Apache uses (1.56 ns versus 4.47 ns for an 8-byte key), and the distinct-counter update is hash-bound. On equal hashing (the `ours-murmur3` bars in the plot) Apache C++'s sketch loops are faster, so the comparison rewards the hash choice rather than loop-level cleverness. Bloom is the one sketch where Apache C++'s blocked layout stays ahead even with our faster hash; we sit within about 6% of it. Absolute numbers are machine-dependent; regenerate them with the harness (`make -C benchmarks report`).
+The win is driven by the hash. xxh3 is about 2.86x faster per call than the MurmurHash3 Apache uses (1.56 ns versus 4.47 ns for an 8-byte key), and the distinct-counter update is hash-bound. Measured on equal hashing (the harness can build our sketches with the same MurmurHash3 via the internal `ours-murmur3` plane), Apache C++'s sketch loops are actually faster, so the comparison rewards the hash choice rather than loop-level cleverness. Bloom is the one sketch where Apache C++'s blocked layout stays ahead even with our faster hash; we sit within about 6% of it. Absolute numbers are machine-dependent; regenerate them with the harness (`make -C benchmarks report`).
 
 ### Latency (time per operation)
 
@@ -63,6 +63,13 @@ The `benchmarks/` directory contains everything needed to reproduce the numbers 
 - Three standalone runners (`runner-ours`, `runner-apache-rust`, `runner-cpp`) that emit one shared CSV schema over identical datasets.
 - A Python reporter that prints comparison tables, renders the Tahoma-styled matplotlib plots shown above, and enforces a CI accuracy gate against per-sketch thresholds.
 - A multi-trial RMSE mode that is the only accuracy comparison we treat as meaningful.
+
+The Apache references are the official upstream implementations, built and run locally:
+
+- C++: a checkout of `github.com/apache/datasketches-cpp` under `lib/datasketches-cpp`, pulled into the build by `runner-cpp/CMakeLists.txt` via `add_subdirectory` (header-only `datasketches` + `filters` targets, C++11, g++). The figures here were taken against master `3.2.0-858-g0bab259` (2026-06-19). The C++ runner runs a startup self-check that aborts if its measurement scaffolding (the bootstrap-CI parity constants or the live-bytes counter) is miscompiled, so a broken build cannot silently emit plausible-but-wrong numbers.
+- Rust: a path dependency on `lib/datasketches-rust/datasketches` (the official Apache Rust crate), declared in `runner-apache-rust/Cargo.toml`.
+
+Both Apache checkouts live under the gitignored `lib/` directory, so reproducing the cross-implementation comparison from a fresh clone means placing those upstream checkouts under `lib/` first; the `ours` plane needs no external dependency.
 
 ```bash
 # Multi-trial RMSE comparison (ours vs apache-rust vs apache-cpp)

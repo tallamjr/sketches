@@ -370,3 +370,21 @@ def test_noise_warnings_flags_wide_ci(tmp_path):
     joined = " ".join(warnings)
     assert "theta" in joined
     assert "hll" not in joined
+
+
+def test_comparison_rows_drops_murmur3_and_peerless_sketches():
+    # ours-murmur3 is internal hash-isolation; kll has no Apache peer. Both must
+    # be excluded from the comparison bar plots, while ours/apache rows for a
+    # sketch that has a peer are kept.
+    rows = [
+        {"implementation": "ours", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "ours-murmur3", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "apache-cpp", "sketch": "hll", "dataset": "synthetic", "op": "distinct_count"},
+        {"implementation": "ours", "sketch": "kll", "dataset": "synthetic", "op": "quantile_median"},
+    ]
+    kept = plots._comparison_rows(rows)
+    impls = {(r["implementation"], r["sketch"]) for r in kept}
+    assert ("ours", "hll") in impls
+    assert ("apache-cpp", "hll") in impls
+    assert ("ours-murmur3", "hll") not in impls   # hash-isolation plane dropped
+    assert ("ours", "kll") not in impls           # no Apache peer -> dropped

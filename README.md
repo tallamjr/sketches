@@ -103,7 +103,9 @@ In absolute terms, time per operation (lower is better): an HLL update is about 
 
 ![Latency per operation](assets/benchmarks/latency.png)
 
-See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, all plots, and the throughput and memory views.
+**What we benchmark against.** The references are the official Apache implementations built and run locally: `apache/datasketches-cpp` at master `3.2.0-858-g0bab259` (2026-06-19), built with cmake/g++ at C++11, and the official Apache Rust `datasketches` crate. Each runner emits one shared CSV schema over identical datasets, and the C++ runner has a startup self-check that aborts if its measurement scaffolding is miscompiled. Throughput is the median over independent rounds with a 95% bootstrap confidence interval; accuracy is multi-trial RMSE. The current plots use a synthetic stream (sequential distinct integers); the harness also supports real TPC-H columns.
+
+See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the reproduction steps, all plots, and the throughput and memory views.
 
 ## Documentation
 

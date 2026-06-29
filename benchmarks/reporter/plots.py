@@ -72,6 +72,34 @@ def _ordered_impls(rows):
     return ordered
 
 
+# Implementations that count as an Apache reference in the comparison plots.
+_APACHE_IMPLS = {"apache-rust", "apache-cpp"}
+
+
+def _comparison_rows(rows):
+    """Rows for the cross-implementation comparison bar plots.
+
+    Drops the ``ours-murmur3`` hash-isolation plane (internal analysis, not part
+    of the shipping ``ours`` versus Apache story) and drops any
+    (sketch, dataset, op) group that has no Apache reference row (for example KLL,
+    which Apache does not implement), since a single-bar group is not a
+    comparison. The hash-isolation story stays in the benchmarks prose and the
+    report table; it is only the headline plots that are kept clean.
+    """
+    present_by_key = {}
+    for row in rows:
+        key = (row["sketch"], row["dataset"], row["op"])
+        present_by_key.setdefault(key, set()).add(row["implementation"])
+    kept = []
+    for row in rows:
+        if row["implementation"] == "ours-murmur3":
+            continue
+        key = (row["sketch"], row["dataset"], row["op"])
+        if present_by_key[key] & _APACHE_IMPLS:
+            kept.append(row)
+    return kept
+
+
 def _as_float(value):
     if value is None:
         return None
@@ -362,6 +390,7 @@ def render_latency_plot(rows, out_dir):
     written path.
     """
     os.makedirs(out_dir, exist_ok=True)
+    rows = _comparison_rows(rows)
 
     impls = _ordered_impls(rows)
 
@@ -424,6 +453,7 @@ def render_plots(rows, out_dir):
     Returns the list of written paths in that order.
     """
     os.makedirs(out_dir, exist_ok=True)
+    rows = _comparison_rows(rows)
 
     written = []
     written.append(
