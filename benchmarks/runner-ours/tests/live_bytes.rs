@@ -10,13 +10,13 @@
 #[test]
 fn live_bytes_is_nonzero() {
     let rows = runner_ours::run(10_000, 3);
-    // `live_bytes` is column index 9 (0-based) in the 13-column schema. Assert
+    // `live_bytes` is column index 11 (0-based) in the 15-column schema. Assert
     // it is a positive number, not an exact value: the heap size is
     // allocator-dependent.
     for r in &rows[1..] {
         let lb: u64 = r
             .split(',')
-            .nth(9)
+            .nth(11)
             .unwrap_or("")
             .parse()
             .unwrap_or_else(|_| panic!("live_bytes not parseable in row: {r}"));

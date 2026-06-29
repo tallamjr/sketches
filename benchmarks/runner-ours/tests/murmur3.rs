@@ -3,6 +3,15 @@
 //! murmur3 variant.
 
 #[test]
+fn header_has_ci_columns() {
+    let rows = runner_ours::run(100, 2);
+    assert_eq!(
+        rows[0],
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,estimate,exact,rel_error"
+    );
+}
+
+#[test]
 fn murmur3_rows_present() {
     let rows = runner_ours::run(1000, 3);
 

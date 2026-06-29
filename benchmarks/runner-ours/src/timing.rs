@@ -30,6 +30,8 @@ pub fn stddev(xs: &[f64]) -> f64 {
 const BOOTSTRAP_RESAMPLES: usize = 2000;
 /// Fixed SplitMix64 seed so the bootstrap CI is reproducible run to run.
 const BOOTSTRAP_SEED: u64 = 0x9E3779B97F4A7C15;
+/// Timed reps inside each independent round; the round-sample is their median.
+pub const REPS_PER_ROUND: usize = 5;
 
 /// A stabilised throughput measurement: the median over independent rounds, the
 /// population stddev of the round-samples, and a nonparametric 95% bootstrap CI.
@@ -113,32 +115,6 @@ pub fn timed_throughput_rounds<F: FnMut()>(
         ci_low,
         ci_high,
     }
-}
-
-/// Run `body` once untimed (if `warmup`), then `reps` timed reps. Each rep is
-/// assumed to perform `ops_per_rep` operations. Returns (median, stddev) ops/s.
-pub fn timed_throughput<F: FnMut()>(
-    reps: usize,
-    warmup: bool,
-    ops_per_rep: u64,
-    mut body: F,
-) -> (f64, f64) {
-    if warmup {
-        body();
-    }
-    let mut rates = Vec::with_capacity(reps);
-    for _ in 0..reps {
-        let start = Instant::now();
-        body();
-        let secs = start.elapsed().as_secs_f64();
-        rates.push(if secs > 0.0 {
-            ops_per_rep as f64 / secs
-        } else {
-            0.0
-        });
-    }
-    let s = stddev(&rates);
-    (median(&mut rates), s)
 }
 
 #[cfg(test)]
