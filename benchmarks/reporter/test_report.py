@@ -72,6 +72,23 @@ def test_render_table_surfaces_ours_murmur3(tmp_path):
     assert "2.000 (ours)" in table
 
 
+def test_render_table_has_murmur3_vs_apache_ratios(tmp_path):
+    rows_csv = _write_csv(
+        tmp_path,
+        "results.csv",
+        [
+            "ours,hll,synthetic,update,1000,10,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,10,2600000,40000,2500000,2700000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,10,2500000,30000,2450000,2550000,144,2304,1005,1000,0.005",
+        ],
+    )
+    rows = report.load_rows([rows_csv])
+    table = report.render_table(rows)
+    assert "tput ours-m3/a-rust" in table
+    # 2.6e6 / 2.5e6 = 1.040, ours-murmur3 the better side
+    assert "1.040 (ours)" in table
+
+
 def test_render_table_excludes_python_plane_labels(tmp_path):
     # The Python plane emits `ours`/`apache` labels that collide with the Rust
     # `ours`. They must not enter the native comparison table: only the native

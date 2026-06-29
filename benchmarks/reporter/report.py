@@ -188,6 +188,8 @@ def render_table(rows):
     columns += [
         "tput ours/a-rust",
         "tput ours/a-cpp",
+        "tput ours-m3/a-rust",
+        "tput ours-m3/a-cpp",
         "mem ours/a-rust",
         "mem ours/a-cpp",
     ]
@@ -223,6 +225,7 @@ def render_table(rows):
         plane = "/".join(key)
 
         ours_t = tput(impl_rows, "ours")
+        oursm3_t = tput(impl_rows, "ours-murmur3")
         arust_t = tput(impl_rows, "apache-rust")
         acpp_t = tput(impl_rows, "apache-cpp")
         ours_m = live(impl_rows, "ours")
@@ -245,6 +248,8 @@ def render_table(rows):
         cells += [
             _ratio_cell(ours_t, arust_t, higher_is_better=True),
             _ratio_cell(ours_t, acpp_t, higher_is_better=True),
+            _ratio_cell(oursm3_t, arust_t, higher_is_better=True),
+            _ratio_cell(oursm3_t, acpp_t, higher_is_better=True),
             _ratio_cell(ours_m, arust_m, higher_is_better=False),
             _ratio_cell(ours_m, acpp_m, higher_is_better=False),
         ]
