@@ -750,7 +750,25 @@ CPC was previously broken (it reported around 173% error). It is now an ICON+HIP
 
 ### Throughput
 
-Throughput is **machine-dependent** and dominated by the choice of hash function (our xxh3 versus Apache's MurmurHash3), so we do not quote a fixed "Nx faster" claim. As a directional, single-machine snapshot (update operations per second, our implementation): HLL around 63M ops/sec, Theta around 249M ops/sec, CPC around 63M ops/sec. Treat these as illustrative and regenerate them locally with the harness rather than as a precise benchmark.
+Throughput is now measured on a stabilised harness: each figure is the median over independent rounds with a 95% bootstrap confidence interval, so a real change is distinguishable from run-to-run noise. On this harness (N = 1,000,000, single machine), our xxh3-backed default beats hand-tuned Apache C++ on four of the five shared sketches and beats the Apache Rust crate on all five:
+
+| Sketch   | Ours vs Apache C++   | Ours vs Apache Rust |
+| -------- | -------------------- | ------------------- |
+| CountMin | 3.3x ahead           | 3.3x ahead          |
+| HLL      | 2.5x ahead           | 5.4x ahead          |
+| Theta    | 1.9x ahead           | 4.0x ahead          |
+| CPC      | 1.3x ahead           | 1.9x ahead          |
+| Bloom    | 0.93x (near parity)  | 3.9x ahead          |
+
+![Throughput by sketch and implementation](assets/benchmarks/throughput.png)
+
+The win is driven by the hash. xxh3 is about 2.86x faster per call than the MurmurHash3 Apache uses (1.56 ns versus 4.47 ns for an 8-byte key), and the distinct-counter update is hash-bound. On equal hashing (the `ours-murmur3` bars in the plot) Apache C++'s sketch loops are faster, so the comparison rewards the hash choice rather than loop-level cleverness. Bloom is the one sketch where Apache C++'s blocked layout stays ahead even with our faster hash; we sit within about 6% of it. Absolute numbers are machine-dependent; regenerate them with the harness (`make -C benchmarks report`).
+
+### Memory
+
+Per-sketch live heap (the build-and-hold working footprint, measured by a counting allocator) is at parity with Apache across every sketch:
+
+![Live memory by sketch and implementation](assets/benchmarks/memory.png)
 
 ### Benchmark harness
 
