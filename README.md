@@ -35,54 +35,38 @@ Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservo
 
 **Mergeable** means two independently built sketches can be combined into one that represents the union of both input streams, without access to the original data. This is essential for distributed systems where data is partitioned across nodes -- each node builds a local sketch, then all sketches are merged into a single result.
 
-## Table of Contents
+## Install
 
-<!-- mtoc-start -->
+The package is not yet published to PyPI (the reserved name is `rusty-sketches`); install from source for now.
 
-- [Choosing the Right Sketch](#choosing-the-right-sketch)
-- [Background: Probabilistic Data Structures](#background-probabilistic-data-structures)
-  - [The Cardinality Conundrum](#the-cardinality-conundrum)
-  - [Database Superpowers: Query Planning and GROUP BY Operations](#database-superpowers-query-planning-and-group-by-operations)
-  - [How HLL Works at a Glance](#how-hll-works-at-a-glance)
-  - [Implications and the Big Picture](#implications-and-the-big-picture)
-- [Memory Usage Comparison](#memory-usage-comparison)
-- [Package Installation](#package-installation)
-  - [Prerequisites](#prerequisites)
-  - [From PyPI](#from-pypi)
-  - [From Source](#from-source)
-- [Getting Started](#getting-started)
-  - [Quick Installation](#quick-installation)
-  - [Development Workflow](#development-workflow)
-- [Library Usage](#library-usage)
-  - [Business Intelligence Examples](#business-intelligence-examples)
-  - [HLL Sketch Example](#hll-sketch-example)
-    - [Minimal Test with Polars](#minimal-test-with-polars)
-  - [CPC Sketch Example](#cpc-sketch-example)
-    - [Minimal Test with Polars](#minimal-test-with-polars-1)
-  - [Bloom Filter Example](#bloom-filter-example)
-  - [Frequency Estimation Example](#frequency-estimation-example)
-  - [Quantile Estimation Example](#quantile-estimation-example)
-  - [Sampling Example](#sampling-example)
-  - [Linear and Hybrid Counter Example](#linear-and-hybrid-counter-example)
-  - [Array of Doubles (AOD) Sketch Example](#array-of-doubles-aod-sketch-example)
-- [Extending HLL++: Sparse Buffer, Variable-Length Encoding, and Hybrid Representation](#extending-hll-sparse-buffer-variable-length-encoding-and-hybrid-representation)
-  - [Theta Sketch Example](#theta-sketch-example)
-    - [Minimal Test with Polars](#minimal-test-with-polars-2)
-- [Architecture](#architecture)
-- [Performance](#performance)
-  - [Accuracy (multi-trial RMSE)](#accuracy-multi-trial-rmse)
-  - [Throughput](#throughput)
-  - [Benchmark harness](#benchmark-harness)
-  - [When to use each](#when-to-use-each)
-- [TPC-H Business Intelligence Benchmarks](#tpc-h-business-intelligence-benchmarks)
-- [Roadmap and Missing Features](#roadmap-and-missing-features)
-  - [Not Yet Implemented](#not-yet-implemented)
-  - [Current Development Priorities](#current-development-priorities)
-- [License](#license)
+```bash
+git clone https://github.com/tallamjr/sketches.git
+cd sketches
+pip install .
+```
 
-<!-- mtoc-end -->
+For an editable install with development dependencies and the maturin build:
 
-## Choosing the Right Sketch
+```bash
+pip install -e .[dev]
+maturin develop
+```
+
+## Quickstart
+
+```python
+from sketches import HllSketch
+
+sketch = HllSketch(lg_k=12)
+for item in ["apple", "banana", "orange", "apple"]:
+    sketch.update(item)
+
+print(f"Estimated unique items: {sketch.estimate():.2f}")
+```
+
+See the [usage guide](docs/usage.md) for every sketch with runnable examples.
+
+## Choosing the right sketch
 
 Different problems call for different sketches. Use this guide to pick the right one for your use case.
 
@@ -106,82 +90,30 @@ Different problems call for different sketches. Use this guide to pick the right
 - **KLL vs T-Digest**: KLL has provable error bounds (~1.65% at k=200). T-Digest excels at extreme quantiles (p99, p99.9) but bounds are empirical.
 - **Algorithm R vs A**: Both produce uniform samples. Algorithm A skips items probabilistically, making it ~19x faster for large streams.
 
-## Package Installation
+## Performance
 
-### Prerequisites
+All figures come from a stabilised harness: throughput is the median over independent rounds with a 95% bootstrap confidence interval, and accuracy is multi-trial RMSE. At N = 1,000,000 our xxh3-backed default beats hand-tuned Apache C++ on four of the five shared sketches and beats the Apache Rust crate on all five. On accuracy, HLL, Theta and CPC are at parity-or-better with Apache DataSketches by multi-trial RMSE.
 
-- Python 3.10+
-- Optionally, for DataFrame examples: `polars` (`pip install polars`).
+![Speedup vs Apache](assets/benchmarks/speedup_vs_apache.png)
 
-- Optionally, for memory measurement examples: `psutil` (`pip install psutil`).
+See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, all plots, and the latency (ns/op) view.
 
-### From PyPI
+## Documentation
 
-The package is not yet published to PyPI. Install from source for now (see below).
+- [Background: probabilistic data structures](docs/background.md)
+- [Usage guide](docs/usage.md)
+- [Design and architecture](docs/design.md)
+- [Benchmarks](docs/benchmarks.md)
 
-```bash
-pip install rusty-sketches
-```
+## Roadmap
 
-### From Source
+Planned but not yet implemented:
 
-```bash
-git clone https://github.com/tallamjr/sketches.git
-cd sketches
-pip install .
-```
+- **Similarity estimation (largest gap)**: MinHash, SimHash, an LSH framework.
+- **Performance**: SIMD-accelerated register updates (the implementation is currently pure scalar Rust).
+- **Integration**: Polars custom expressions and DataFrame operations.
 
-For an editable install with development dependencies:
-
-```bash
-pip install -e .[dev]
-```
-
-**For TPC-H Performance Analysis Notebook:**
-
-```bash
-# Install with visualisation dependencies
-pip install -e .[dev]  # includes seaborn, matplotlib, pandas
-
-# Run the comprehensive business intelligence benchmarks
-pytest --nbmake examples/tpch_performance_analysis.ipynb
-```
-
-## Roadmap and Missing Features
-
-While this library provides a comprehensive suite of probabilistic data structures, the following features are planned but not yet implemented:
-
-### Not Yet Implemented
-
-**Similarity Estimation (Largest Gap)**
-
-- **MinHash** - Set similarity estimation via min-hash signatures (Jaccard similarity)
-- **SimHash** - Locality-sensitive hashing for cosine similarity and near-duplicate detection
-- **LSH Framework** - Approximate nearest-neighbour search using banded hashing
-
-**Historical / Educational**
-
-- **Probabilistic Counter (Flajolet-Martin)** - Original probabilistic counting algorithm
-- **LogLog Counter** - Predecessor to HyperLogLog
-- **q-digest** - Tree-based quantile estimation with range query support
-- **Quotient Filter** - Cache-friendly alternative to Bloom filters
-- **Cuckoo Filter** - Bloom filter alternative with deletion support and better locality
-
-**Performance**
-
-- **SIMD Acceleration** - The implementation is currently pure scalar Rust; vectorised register updates are a possible future direction.
-- **Apache byte-compatibility** - We use our own compact codec and xxh3 hashing, so the official DataSketches serialisation format is not supported.
-
-**Integration**
-
-- **Polars Integration** - Custom expressions and DataFrame operations
-- **Advanced Serialisation** - Network-optimised protocols beyond the current compact codec
-
-### Current Development Priorities
-
-1. **MinHash implementation** -- fills the similarity estimation gap (largest missing domain)
-2. Polars custom expressions for seamless DataFrame integration
-3. Performance optimisations for Python bindings (batch operations)
+Current priorities: MinHash first (fills the similarity gap), then Polars expressions, then batch operations for the Python bindings.
 
 ## License
 
