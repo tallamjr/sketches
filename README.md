@@ -92,25 +92,35 @@ Different problems call for different sketches. Use this guide to pick the right
 
 ## Performance
 
-At N = 1,000,000 our xxh3-backed default beats hand-tuned Apache C++ on four of
-the five shared sketches (Bloom within about 6%) and beats the Apache Rust crate
-on all five. On real TPC-H string columns the lead widens and we beat Apache C++
-on all five, Bloom included. On accuracy, HLL, Theta and CPC are at
-parity-or-better with Apache DataSketches by multi-trial RMSE.
+Measured on a stabilised harness (the median over independent rounds with a 95%
+bootstrap confidence interval), our xxh3-backed default is at or ahead of Apache
+DataSketches across the board. On a synthetic integer stream (N = 1,000,000) we
+lead hand-tuned Apache C++ on four of the five shared sketches, with Bloom within
+about 6%, and lead the Apache Rust crate on all five. On real TPC-H string
+columns the margin grows and we lead Apache C++ on every sketch, Bloom included.
+Accuracy stays at parity-or-better: HLL, Theta and CPC match or beat Apache
+DataSketches by multi-trial RMSE.
 
-Speedup over Apache on a synthetic stream of sequential distinct integers (N = 1,000,000):
-
-![Speedup vs Apache, synthetic integers](assets/benchmarks/speedup_vs_apache.png)
-
-On real TPC-H string data (the `c_address` column of a `customer` table, about 150k distinct strings, generated with [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs)) the lead widens and we beat Apache C++ on every sketch, Bloom included:
+The clearest view is the speedup over Apache on a real TPC-H column (the
+`c_address` field of a `customer` table, about 150k distinct strings, generated
+with [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs)), where every bar
+clears the parity line:
 
 ![Speedup vs Apache, real TPC-H strings](assets/benchmarks/speedup_vs_apache_tpch.png)
 
-In absolute terms, time per operation on the synthetic stream (lower is better): an HLL update is about 1.8 ns for us versus 4.6 ns for Apache C++.
+The same lead in absolute time: a single HLL update takes roughly 1.8 ns with
+this library against 4.6 ns for Apache C++ (lower is better).
 
 ![Latency per operation, synthetic integers](assets/benchmarks/latency.png)
 
-**What we benchmark against.** The references are the official Apache implementations built and run locally: `apache/datasketches-cpp` at master `3.2.0-858-g0bab259` (2026-06-19), built with cmake/g++ at C++11, and the official Apache Rust `datasketches` crate. Each runner emits one shared CSV schema over identical datasets, and the C++ runner has a startup self-check that aborts if its measurement scaffolding is miscompiled. Throughput is the median over independent rounds with a 95% bootstrap confidence interval; accuracy is multi-trial RMSE.
+**What we benchmark against.** The references are the official Apache
+implementations built and run locally: `apache/datasketches-cpp` at master
+`3.2.0-858-g0bab259` (2026-06-19), built with cmake/g++ at C++11, and the
+official Apache Rust `datasketches` crate. Each runner emits one shared CSV
+schema over identical datasets, and the C++ runner has a startup self-check that
+aborts if its measurement scaffolding is miscompiled. Throughput is the median
+over independent rounds with a 95% bootstrap confidence interval; accuracy is
+multi-trial RMSE.
 
 See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the reproduction steps, all plots, and the throughput and memory views.
 
