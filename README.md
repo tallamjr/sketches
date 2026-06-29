@@ -21,7 +21,7 @@ Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservo
 |                            | Hybrid Counter     | Auto-transitions from Linear to HLL                             |
 | **Set Operations**         | Theta Sketch       | Union, intersection, difference with cardinality estimation     |
 | **Sampling**               | Algorithm R        | Basic reservoir sampling for uniform random samples             |
-|                            | Algorithm A        | Optimised reservoir sampling (19x faster for large streams)     |
+|                            | Algorithm A        | Optimised reservoir sampling (Vitter, skips items probabilistically) |
 |                            | Weighted Sampling  | Probability-proportional reservoir sampling                     |
 |                            | Stream Sampling    | High-throughput sampling with batching                          |
 | **Quantile Estimation**    | T-Digest           | Superior accuracy for extreme quantiles (p95, p99)              |
@@ -78,7 +78,7 @@ Different problems call for different sketches. Use this guide to pick the right
 | **Compact Cardinality**   | "Unique count with minimal serialised size?" | `CpcSketch`                   | `CpcSketch`                                 | Yes, sketch merging               |
 | **Frequency**             | "What are the top-K items?"                  | `FrequentStringsSketch`       | `CountMinSketch` / `CountSketch`            | Yes, entry-wise addition          |
 | **Quantiles**             | "What's the p99 latency?"                    | `KllSketch` (provable bounds) | `TDigest` (extreme quantile accuracy)       | Yes, digest merging               |
-| **Sampling**              | "Give me a random subset"                    | `ReservoirSamplerR`           | `ReservoirSamplerA` (19x faster)            | Partial, merge samplers           |
+| **Sampling**              | "Give me a random subset"                    | `ReservoirSamplerR`           | `ReservoirSamplerA` (Vitter, skips items)   | Partial, merge samplers           |
 | **Weighted Sampling**     | "Sample proportional to weight"              | `WeightedReservoirSampler`    | `VarOptSketch` (Horvitz-Thompson)           | Yes, VarOpt merge                 |
 | **Multi-dimensional**     | "Aggregate multiple metrics per key"         | `AodSketch`                   | `AodSketch`                                 | Yes, summary merging              |
 
@@ -88,7 +88,7 @@ Different problems call for different sketches. Use this guide to pick the right
 - **HLL vs CPC**: CPC achieves ~40% smaller serialised size but is more complex. Use CPC when network transfer cost matters.
 - **Count-Min vs Count Sketch**: Count-Min always overestimates (conservative). Count Sketch is unbiased but uses more space.
 - **KLL vs T-Digest**: KLL has provable error bounds (~1.65% at k=200). T-Digest excels at extreme quantiles (p99, p99.9) but bounds are empirical.
-- **Algorithm R vs A**: Both produce uniform samples. Algorithm A skips items probabilistically, making it ~19x faster for large streams.
+- **Algorithm R vs A**: Both produce uniform samples. Algorithm A skips items probabilistically (Vitter), which is much faster than Algorithm R for large streams.
 
 ## Performance
 
@@ -96,8 +96,9 @@ Measured on a stabilised harness (the median over independent rounds with a 95%
 bootstrap confidence interval), our xxh3-backed default leads Apache DataSketches
 across the board. On real TPC-H string columns we beat hand-tuned Apache C++ on
 every one of the five shared sketches, and beat the Apache Rust crate on all five
-by wider margins. Accuracy stays at parity-or-better: HLL, Theta and CPC match or
-beat Apache DataSketches by multi-trial RMSE.
+by wider margins. Accuracy stays at parity: HLL, Theta and CPC match Apache
+DataSketches within the run-to-run noise band by multi-trial RMSE, all at or below
+the `1/sqrt(k)` floor.
 
 Speedup over Apache on a real TPC-H column (the `c_address` field of a `customer`
 table, about 150k distinct strings, generated with

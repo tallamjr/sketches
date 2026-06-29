@@ -14,15 +14,15 @@ The theoretical error floor for `lg_k = 12` is `1/sqrt(4096) = 0.0156`. Relative
 
 | Sketch    | Ours (RMSE) | Apache DataSketches (RMSE) | Verdict                         |
 | --------- | ----------- | -------------------------- | ------------------------------- |
-| HLL       | 0.0122      | 0.0129                     | Ours slightly better, below floor (via HIP) |
+| HLL       | 0.0122      | 0.0129                     | Parity, below floor (via HIP)   |
 | Theta     | 0.0153      | 0.0144                     | Parity, at the floor            |
 | CPC       | 0.0089      | 0.0084                     | Parity, below the floor         |
 
-All three distinct counters are at parity-or-better against Apache DataSketches, and HLL and CPC sit below the `1/sqrt(k)` floor thanks to their HIP estimators.
+All three distinct counters are at parity with Apache DataSketches: each sits within 1.25x of the Apache figure in either direction, which is inside the run-to-run noise band (the winner flips between runs, so neither implementation can claim a durable accuracy lead). HLL and CPC sit below the `1/sqrt(k)` floor thanks to their HIP estimators, and Theta sits right at the floor (0.0153 versus 0.0156).
 
 ![RMSE by sketch and implementation](../assets/benchmarks/rmse_comparison.png)
 
-CPC was previously broken (it reported around 173% error). It is now an ICON+HIP port: roughly 0.34% error on a synthetic stream and 1.17% on a real TPC-H column. HLL gained a HIP estimator that moved its RMSE from 0.0175 to 0.0122, taking it from worse-than-Apache to slightly-better-than-Apache and below the floor:
+CPC was previously broken (it reported around 173% error). It is now an ICON+HIP port: roughly 0.34% error on a synthetic stream and 1.17% on a real TPC-H column. HLL gained a HIP estimator that moved its RMSE from well above Apache (0.0175) to parity with Apache (about 0.0122 versus 0.0129, both below the floor); the HIP estimator closed the gap:
 
 ![HLL accuracy before and after HIP](../assets/benchmarks/hll_rmse_before_after.png)
 
@@ -32,21 +32,23 @@ Throughput is now measured on a stabilised harness: each figure is the median ov
 
 | Sketch   | Ours vs Apache C++   | Ours vs Apache Rust |
 | -------- | -------------------- | ------------------- |
-| CountMin | 3.3x ahead           | 3.3x ahead          |
-| HLL      | 2.5x ahead           | 5.4x ahead          |
-| Theta    | 1.9x ahead           | 4.0x ahead          |
-| CPC      | 1.3x ahead           | 1.9x ahead          |
-| Bloom    | 0.93x (near parity)  | 3.9x ahead          |
+| CountMin | about 3.2x ahead     | about 3.3x ahead    |
+| HLL      | about 2.4x ahead     | about 5.2x ahead    |
+| Theta    | about 1.9x ahead     | about 4.1x ahead    |
+| CPC      | about 1.3x ahead     | about 1.9x ahead    |
+| Bloom    | about 0.96x (near parity) | about 4.0x ahead |
+
+These multipliers come from a single representative run on one machine. They vary run to run, so the robust claim is the direction (we lead Apache, except synthetic Bloom which is at parity, slightly behind Apache C++) rather than the exact factor. Synthetic Bloom is the one sketch where we do not lead Apache C++ on integers: at about 0.96x it is a touch behind, so it is reported as parity, not a win.
 
 ![Throughput by sketch and implementation](../assets/benchmarks/throughput.png)
 
 ![Speedup vs Apache by sketch](../assets/benchmarks/speedup_vs_apache.png)
 
-The win is driven by the hash. xxh3 is about 2.86x faster per call than the MurmurHash3 Apache uses (1.56 ns versus 4.47 ns for an 8-byte key), and the distinct-counter update is hash-bound. Measured on equal hashing (the harness can build our sketches with the same MurmurHash3 via the internal `ours-murmur3` plane), Apache C++'s sketch loops are actually faster, so the comparison rewards the hash choice rather than loop-level cleverness. Bloom is the one sketch where Apache C++'s blocked layout stays ahead even with our faster hash; we sit within about 6% of it. Absolute numbers are machine-dependent; regenerate them with the harness (`make -C benchmarks report`).
+The win is driven by the hash. xxh3 is about 2.86x faster per call than the MurmurHash3 Apache uses (1.56 ns versus 4.47 ns for an 8-byte key), and the distinct-counter update is hash-bound. Measured on equal hashing (the harness can build our sketches with the same MurmurHash3 via the internal `ours-murmur3` plane), Apache C++'s sketch loops are actually faster, so the comparison rewards the hash choice rather than loop-level cleverness. Bloom is the one sketch where Apache C++'s blocked layout stays ahead even with our faster hash; we sit within about 4% of it. Absolute numbers are machine-dependent; regenerate them with the harness (`make -C benchmarks report`).
 
 ### Latency (time per operation)
 
-The same data as throughput, expressed as time per operation (ns/op, lower is better). For example an HLL update is roughly 1.8 ns for us versus about 4.6 ns for apache-cpp at N = 1,000,000.
+The same data as throughput, expressed as time per operation (ns/op, lower is better). For example an HLL update is roughly 1.9 ns for us versus about 4.5 ns for apache-cpp at N = 1,000,000.
 
 ![Latency per operation by sketch and implementation](../assets/benchmarks/latency.png)
 
@@ -64,11 +66,11 @@ On this string workload our default beats hand-tuned Apache C++ on **all five** 
 
 | Sketch   | Ours vs Apache C++ | Ours vs Apache Rust |
 | -------- | ------------------ | ------------------- |
-| CountMin | 2.66x ahead        | 4.06x ahead         |
-| HLL      | 2.16x ahead        | 3.85x ahead         |
-| Theta    | 1.74x ahead        | 2.79x ahead         |
-| Bloom    | 1.62x ahead        | 4.37x ahead         |
-| CPC      | 1.53x ahead        | 2.21x ahead         |
+| CountMin | about 2.6x ahead   | about 4.0x ahead    |
+| HLL      | about 2.1x ahead   | about 3.9x ahead    |
+| Theta    | about 1.7x ahead   | about 2.7x ahead    |
+| Bloom    | about 1.6x ahead   | about 4.3x ahead    |
+| CPC      | about 1.5x ahead   | about 2.1x ahead    |
 
 ![Throughput on TPC-H customer.c_address](../assets/benchmarks/throughput_tpch.png)
 
@@ -107,7 +109,7 @@ make -C benchmarks gate
 **Choose this library for:**
 
 - **Algorithm diversity**: sampling, frequency estimation, specialised sketches alongside the distinct counters.
-- **Accuracy**: HLL, Theta and CPC are at parity-or-better than Apache DataSketches on multi-trial RMSE.
+- **Accuracy**: HLL, Theta and CPC are at parity with Apache DataSketches on multi-trial RMSE (within 1.25x either way, at or below the `1/sqrt(k)` floor).
 - **Memory safety**: Rust eliminates segfaults and memory leaks.
 
 **Choose Apache DataSketches for:**

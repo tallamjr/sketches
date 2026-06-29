@@ -55,11 +55,12 @@ which is in the same family of fast, well-distributed non-cryptographic hashes.
 
 On the stabilised benchmark harness this library leads Apache DataSketches on
 throughput across the covered sketches: it is ahead on four of the five shared sketches
-against hand-tuned Apache C++ on synthetic integers (Bloom is within about 6%), ahead on
+against hand-tuned Apache C++ on synthetic integers (Bloom is within about 4%), ahead on
 all five against Apache C++ on real TPC-H string columns, and ahead on all five against
 the Apache Rust crate. The lead is driven by the hash: xxh3 is faster per call than the
 MurmurHash3 Apache uses, and the distinct-counter update is hash-bound. Accuracy stays
-at parity-or-better by multi-trial RMSE. This page covers the algorithms themselves; for
+at parity by multi-trial RMSE (within 1.25x of Apache either way, at or below the
+`1/sqrt(k)` floor). This page covers the algorithms themselves; for
 the measured numbers, plots, and reproduction steps, see [docs/benchmarks.md](benchmarks.md).
 
 ## Cardinality estimation
