@@ -14,7 +14,7 @@ authors = [
   { name = "Tarek Allam", email = "t.allam.jr@gmail.com" },
 ]
 license = { file = "LICENSE.md" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
   "Environment :: Console",
   "Intended Audience :: Science/Research",
@@ -23,9 +23,9 @@ classifiers = [
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Rust",
   "Programming Language :: Rust",
   "Topic :: Scientific/Engineering",

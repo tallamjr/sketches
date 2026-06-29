@@ -29,7 +29,7 @@ maturin compiles the Rust extension and packages it into a Python wheel:
 maturin build --release
 
 # Build wheels for multiple Python versions (requires each version installed)
-maturin build --release --interpreter python3.10 python3.11 python3.12
+maturin build --release --interpreter python3.11 python3.12 python3.13
 
 # Build an sdist (source distribution) as well
 maturin sdist
