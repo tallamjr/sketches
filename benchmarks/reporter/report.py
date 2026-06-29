@@ -5,7 +5,8 @@ Ingests one or more result CSVs (emitted by runner-ours, runner-apache-rust,
 runner-cpp), all sharing the schema:
 
     implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,
-    throughput_stddev,bytes,live_bytes,estimate,exact,rel_error
+    throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,
+    estimate,exact,rel_error
 
 Two modes:
 
@@ -37,6 +38,8 @@ HEADER = [
     "reps",
     "throughput_median_ops_per_s",
     "throughput_stddev",
+    "throughput_ci_low",
+    "throughput_ci_high",
     "bytes",
     "live_bytes",
     "estimate",
@@ -52,6 +55,8 @@ NUMERIC_FIELDS = {
     "reps": int,
     "throughput_median_ops_per_s": float,
     "throughput_stddev": float,
+    "throughput_ci_low": float,
+    "throughput_ci_high": float,
     "bytes": int,
     "live_bytes": int,
 }

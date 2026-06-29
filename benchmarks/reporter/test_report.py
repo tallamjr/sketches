@@ -10,7 +10,8 @@ import report
 
 HEADER = (
     "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
-    "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error"
+    "throughput_stddev,throughput_ci_low,throughput_ci_high,"
+    "bytes,live_bytes,estimate,exact,rel_error"
 )
 
 
@@ -25,8 +26,8 @@ def test_render_table_joins_ours_and_apache_rust(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -54,9 +55,9 @@ def test_render_table_surfaces_ours_murmur3(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,128,2048,1008,1000,0.008",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "ours-murmur3,hll,synthetic,update,1000,30,3000000,40000,2900000,3100000,128,2048,1008,1000,0.008",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -79,9 +80,9 @@ def test_render_table_excludes_python_plane_labels(tmp_path):
         tmp_path,
         "mixed.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
-            "apache,hll,synthetic,update,1000,30,9000000,1000,128,2048,1010,1000,0.01",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
+            "apache,hll,synthetic,update,1000,30,9000000,1000,8900000,9100000,128,2048,1010,1000,0.01",
         ],
     )
     rows = report.load_rows([rows_csv])
@@ -97,8 +98,9 @@ def test_load_rows_parses_new_columns(tmp_path):
     csv = tmp_path / "ours.csv"
     csv.write_text(
         "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
-        "throughput_stddev,bytes,live_bytes,estimate,exact,rel_error\n"
-        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,128,2048,1001.0,1000.0,0.001\n"
+        "throughput_stddev,throughput_ci_low,throughput_ci_high,"
+        "bytes,live_bytes,estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,30,5000000.0,12345.0,4800000.0,5200000.0,128,2048,1001.0,1000.0,0.001\n"
     )
     rows = report.load_rows([str(csv)])
     r = rows[0]
@@ -106,11 +108,26 @@ def test_load_rows_parses_new_columns(tmp_path):
     assert r["live_bytes"] == 2048
 
 
+def test_load_rows_parses_ci_columns(tmp_path):
+    csv = tmp_path / "ours.csv"
+    csv.write_text(
+        "implementation,sketch,dataset,op,n,reps,throughput_median_ops_per_s,"
+        "throughput_stddev,throughput_ci_low,throughput_ci_high,bytes,live_bytes,"
+        "estimate,exact,rel_error\n"
+        "ours,hll,synthetic,update,1000,10,5000000.0,12345.0,4800000.0,5200000.0,"
+        "128,2048,1001.0,1000.0,0.001\n"
+    )
+    rows = report.load_rows([str(csv)])
+    r = rows[0]
+    assert r["throughput_ci_low"] == 4800000.0
+    assert r["throughput_ci_high"] == 5200000.0
+
+
 def test_check_accuracy_fails_when_over_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "over.csv",
-        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1050,1000,0.05"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,0,0,128,2048,1050,1000,0.05"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -122,7 +139,7 @@ def test_check_accuracy_passes_when_under_threshold(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "under.csv",
-        ["ours,hll,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.01"],
+        ["ours,hll,synthetic,estimate,1000,30,0,0,0,0,128,2048,1010,1000,0.01"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -134,7 +151,7 @@ def test_check_accuracy_notes_ungated_sketch(tmp_path):
     rows_csv = _write_csv(
         tmp_path,
         "ungated.csv",
-        ["ours,mystery,synthetic,estimate,1000,30,0,0,128,2048,1010,1000,0.5"],
+        ["ours,mystery,synthetic,estimate,1000,30,0,0,0,0,128,2048,1010,1000,0.5"],
     )
     rows = report.load_rows([rows_csv])
     passed, messages = report.check_accuracy(rows, {"hll": 0.02})
@@ -147,9 +164,9 @@ def test_render_plots_writes_three_pngs(tmp_path):
         tmp_path,
         "results.csv",
         [
-            "ours,hll,synthetic,update,1000,30,5000000,45000,128,2048,1010,1000,0.01",
-            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,144,2304,1005,1000,0.005",
-            "ours,theta,synthetic,update,1000,30,3000000,25000,256,4096,1020,1000,0.02",
+            "ours,hll,synthetic,update,1000,30,5000000,45000,4800000,5200000,128,2048,1010,1000,0.01",
+            "apache-rust,hll,synthetic,update,1000,30,2500000,30000,2400000,2600000,144,2304,1005,1000,0.005",
+            "ours,theta,synthetic,update,1000,30,3000000,25000,2900000,3100000,256,4096,1020,1000,0.02",
         ],
     )
     rows = report.load_rows([rows_csv])
