@@ -35,6 +35,10 @@ fn row_seed(base_seed: u64, row: usize) -> u64 {
     base_seed.wrapping_add((row as u64).wrapping_mul(0x9E3779B97F4A7C15))
 }
 
+/// Maximum number of rows handled on the stack per operation. Real
+/// configurations use depth of roughly 5; this cap is far above any practical depth.
+const MAX_HASHES: usize = 64;
+
 /// Count-Min Sketch for frequency estimation
 pub struct CountMinSketchGeneric<H: SketchHasher> {
     width: usize,
@@ -87,8 +91,11 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Update the count for an item
     pub fn update<T: Hashable + ?Sized>(&mut self, item: &T, count: u64) {
-        let hashes = self.hash_item(item);
-        self.update_scalar(&hashes, count);
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let cols = &mut buf[..self.depth];
+        self.hash_positions_into(item, cols);
+        self.update_scalar(cols, count);
     }
 
     /// Increment the count for an item by 1
@@ -98,21 +105,23 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
 
     /// Estimate the frequency of an item
     pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> u64 {
-        let hashes = self.hash_item(item);
-        self.estimate_scalar(&hashes)
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0usize; MAX_HASHES];
+        let cols = &mut buf[..self.depth];
+        self.hash_positions_into(item, cols);
+        self.estimate_scalar(cols)
     }
 
-    /// Generate hash values for an item using one independent xxh3 hash per row.
+    /// Fill `out[..depth]` with this item's per-row column positions using one
+    /// independent xxh3 hash per row. `out` must be at least `depth` long.
     ///
     /// Each row receives a distinct seed derived from DEFAULT_SEED, ensuring
     /// pairwise-independent hashes as required by the Count-Min error guarantee.
-    fn hash_item<T: Hashable + ?Sized>(&self, item: &T) -> Vec<usize> {
-        let mut positions = Vec::with_capacity(self.depth);
-        for row in 0..self.depth {
+    fn hash_positions_into<T: Hashable + ?Sized>(&self, item: &T, out: &mut [usize]) {
+        for (row, slot) in out.iter_mut().enumerate().take(self.depth) {
             let h = hash64_of(&H::default(), item, row_seed(DEFAULT_SEED, row));
-            positions.push((h % self.width as u64) as usize);
+            *slot = (h % self.width as u64) as usize;
         }
-        positions
     }
 
     /// Update counts using scalar operations
@@ -280,12 +289,13 @@ impl CountSketch {
 
     /// Estimate the frequency of an item
     pub fn estimate<T: Hashable + ?Sized>(&self, item: &T) -> i64 {
-        let mut estimates = Vec::with_capacity(self.depth);
-
-        for i in 0..self.depth {
+        debug_assert!(self.depth <= MAX_HASHES);
+        let mut buf = [0i64; MAX_HASHES];
+        let estimates = &mut buf[..self.depth];
+        for (i, slot) in estimates.iter_mut().enumerate() {
             let hash_pos = self.hash_position(item, i);
             let sign = self.hash_sign(item, i);
-            estimates.push(self.table[i][hash_pos] * sign);
+            *slot = self.table[i][hash_pos] * sign;
         }
 
         // Return the median estimate
@@ -426,11 +436,12 @@ mod tests {
         // With a wide sketch (4096 columns) and independent per-row hashes,
         // a single item should map to different columns across almost all rows.
         let c = CountMinSketch::new(4096, 5, false);
-        let positions = c.hash_item(&"some_item");
-        let distinct: std::collections::HashSet<usize> = positions.iter().copied().collect();
+        let mut cols = [0usize; 5];
+        c.hash_positions_into(&"some_item", &mut cols);
+        let distinct: std::collections::HashSet<usize> = cols.iter().copied().collect();
         assert!(
             distinct.len() >= 4,
-            "rows collapse to same column: {positions:?}"
+            "rows collapse to same column: {cols:?}"
         );
     }
 }
