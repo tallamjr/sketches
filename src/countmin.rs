@@ -26,7 +26,15 @@
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
+use crate::serialization::{
+    FAMILY_COUNT_SKETCH, FAMILY_COUNTMIN, Serializable, SerializationError,
+};
 use core::marker::PhantomData;
+use serde::{Deserialize, Serialize};
+
+/// Serial format version for the Count-Min postcard payloads.
+const COUNTMIN_SERIAL_VERSION: u8 = 1;
+const COUNT_SKETCH_SERIAL_VERSION: u8 = 1;
 
 /// Derive a per-row seed that is well-spread across rows.
 /// Multiplying by a large odd constant (Fibonacci hashing) gives good mixing.
@@ -40,11 +48,17 @@ fn row_seed(base_seed: u64, row: usize) -> u64 {
 const MAX_HASHES: usize = 64;
 
 /// Count-Min Sketch for frequency estimation
+///
+/// The `bound = ""` attribute keeps serde from requiring `H: Serialize`; the
+/// hash backend is a zero-sized marker that is skipped and rebuilt on decode.
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct CountMinSketchGeneric<H: SketchHasher> {
     width: usize,
     depth: usize,
     table: Vec<u64>,
     conservative_update: bool,
+    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 
@@ -242,6 +256,26 @@ impl<H: SketchHasher> CountMinSketchGeneric<H> {
     }
 }
 
+impl<H: SketchHasher> Serializable for CountMinSketchGeneric<H> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("CountMinSketch decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_COUNTMIN
+    }
+
+    fn serial_version(&self) -> u8 {
+        COUNTMIN_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Count-Min sketch
 #[derive(Debug, Clone)]
 pub struct CountMinStats {
@@ -257,10 +291,30 @@ pub struct CountMinStats {
 }
 
 /// Count Sketch - similar to Count-Min but uses signed counters for better accuracy
+#[derive(Serialize, Deserialize)]
 pub struct CountSketch {
     width: usize,
     depth: usize,
     table: Vec<Vec<i64>>,
+}
+
+impl Serializable for CountSketch {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("CountSketch decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_COUNT_SKETCH
+    }
+
+    fn serial_version(&self) -> u8 {
+        COUNT_SKETCH_SERIAL_VERSION
+    }
 }
 
 impl CountSketch {

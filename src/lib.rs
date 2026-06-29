@@ -447,6 +447,28 @@ impl BloomFilter {
 
         dict.into()
     }
+
+    /// Serialize the filter to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the filter from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <bloom::BloomFilter as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(BloomFilter { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Counting Bloom Filter.
@@ -491,6 +513,28 @@ impl CountingBloomFilter {
     /// Check if an element might be in the filter.
     pub fn contains(&self, item: &str) -> bool {
         self.inner.contains(&item)
+    }
+
+    /// Serialize the filter to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the filter from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <bloom::CountingBloomFilter as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(CountingBloomFilter { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
@@ -614,6 +658,28 @@ impl CountMinSketch {
 
         dict.into()
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <countmin::CountMinSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(CountMinSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Count Sketch.
@@ -648,6 +714,28 @@ impl CountSketch {
     /// Estimate the frequency of an item.
     pub fn estimate(&self, item: &str) -> i64 {
         self.inner.estimate(&item)
+    }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <countmin::CountSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(CountSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 

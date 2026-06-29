@@ -38,6 +38,10 @@ pub const FAMILY_VAROPT: u8 = 206;
 pub const FAMILY_TUPLE: u8 = 207;
 pub const FAMILY_FREQUENT: u8 = 208;
 pub const FAMILY_TDIGEST_LOCAL: u8 = 209;
+pub const FAMILY_BLOOM: u8 = 210;
+pub const FAMILY_COUNTING_BLOOM: u8 = 211;
+pub const FAMILY_COUNTMIN: u8 = 212;
+pub const FAMILY_COUNT_SKETCH: u8 = 213;
 
 // ---------------------------------------------------------------------------
 // Error type

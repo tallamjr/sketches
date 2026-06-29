@@ -24,16 +24,28 @@
 
 use crate::hash::xxh3::Xxh3Hasher;
 use crate::hash::{DEFAULT_SEED, Hashable, SketchHasher, hash64_of};
+use crate::serialization::{FAMILY_BLOOM, FAMILY_COUNTING_BLOOM, Serializable, SerializationError};
+use serde::{Deserialize, Serialize};
 
 /// Maximum number of hash positions handled on the stack per operation. Real
 /// configurations use k of roughly 7; this cap is far above any practical k.
 const MAX_HASHES: usize = 64;
 
+/// Serial format version for the Bloom postcard payloads.
+const BLOOM_SERIAL_VERSION: u8 = 1;
+const COUNTING_BLOOM_SERIAL_VERSION: u8 = 1;
+
 /// Standard Bloom Filter implementation, generic over the hash backend.
+///
+/// The `bound = ""` attribute keeps serde from requiring `H: Serialize`; the
+/// hash backend is a zero-sized marker that is skipped and rebuilt on decode.
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct BloomFilterGeneric<H: SketchHasher> {
     bit_array: Vec<u64>,
     num_bits: usize,
     num_hash_functions: usize,
+    #[serde(skip)]
     _hasher: core::marker::PhantomData<H>,
 }
 
@@ -188,6 +200,25 @@ impl<H: SketchHasher> BloomFilterGeneric<H> {
     }
 }
 
+impl<H: SketchHasher> Serializable for BloomFilterGeneric<H> {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| SerializationError::CorruptData(format!("BloomFilter decode failed: {e}")))
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_BLOOM
+    }
+
+    fn serial_version(&self) -> u8 {
+        BLOOM_SERIAL_VERSION
+    }
+}
+
 /// Statistics about a Bloom filter
 #[derive(Debug, Clone)]
 pub struct BloomFilterStats {
@@ -199,11 +230,32 @@ pub struct BloomFilterStats {
 }
 
 /// Counting Bloom Filter - allows deletions
+#[derive(Serialize, Deserialize)]
 pub struct CountingBloomFilter {
     counters: Vec<u8>,
     num_bits: usize,
     num_hash_functions: usize,
     max_count: u8,
+}
+
+impl Serializable for CountingBloomFilter {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("in-memory serialisation is infallible")
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, SerializationError> {
+        postcard::from_bytes(bytes).map_err(|e| {
+            SerializationError::CorruptData(format!("CountingBloomFilter decode failed: {e}"))
+        })
+    }
+
+    fn family_id(&self) -> u8 {
+        FAMILY_COUNTING_BLOOM
+    }
+
+    fn serial_version(&self) -> u8 {
+        COUNTING_BLOOM_SERIAL_VERSION
+    }
 }
 
 impl CountingBloomFilter {

@@ -138,6 +138,49 @@ def build_stream_sampler():
     return s
 
 
+def build_bloom():
+    s = ds.BloomFilter(2000, 0.01)
+    for x in _items(1000):
+        s.add(x)
+    return s
+
+
+def build_counting_bloom():
+    s = ds.CountingBloomFilter(2000, 0.01, 255)
+    for x in _items(1000):
+        s.add(x)
+    return s
+
+
+def build_countmin():
+    s = ds.CountMinSketch(2048, 5, False)
+    for k in range(40):
+        for _ in range(k + 1):
+            s.increment(f"k-{k:02d}")
+    return s
+
+
+def build_count_sketch():
+    s = ds.CountSketch(2048, 5)
+    for k in range(40):
+        s.update(f"k-{k:02d}", k + 1)
+    return s
+
+
+def sig_bloom(s):
+    # Membership of every added item must be preserved exactly.
+    return ("bloom", tuple(s.contains(x) for x in _items(1000)))
+
+
+def sig_countmin(s):
+    # Estimate of every key must be preserved exactly.
+    return ("countmin", tuple(s.estimate(f"k-{k:02d}") for k in range(40)))
+
+
+def sig_count_sketch(s):
+    return ("count_sketch", tuple(s.estimate(f"k-{k:02d}") for k in range(40)))
+
+
 def sig_cardinality(s):
     return ("estimate", round(s.estimate(), 6))
 
@@ -211,6 +254,10 @@ CASES = [
     ("ReservoirSamplerR", ds.ReservoirSamplerR, build_reservoir_r, sig_sample_reservoir, 0.0),
     ("ReservoirSamplerA", ds.ReservoirSamplerA, build_reservoir_a, sig_sample_reservoir, 0.0),
     ("StreamSampler", ds.StreamSampler, build_stream_sampler, sig_sample_stream, 0.0),
+    ("BloomFilter", ds.BloomFilter, build_bloom, sig_bloom, 0.0),
+    ("CountingBloomFilter", ds.CountingBloomFilter, build_counting_bloom, sig_bloom, 0.0),
+    ("CountMinSketch", ds.CountMinSketch, build_countmin, sig_countmin, 0.0),
+    ("CountSketch", ds.CountSketch, build_count_sketch, sig_count_sketch, 0.0),
 ]
 
 
@@ -235,7 +282,17 @@ def test_pickle_roundtrip(name, cls, builder, sig, tol):
 
 @pytest.mark.parametrize(
     "cls",
-    [ds.CpcSketch, ds.HllSketch, ds.ThetaSketch, ds.KllSketch, ds.TDigest],
+    [
+        ds.CpcSketch,
+        ds.HllSketch,
+        ds.ThetaSketch,
+        ds.KllSketch,
+        ds.TDigest,
+        ds.BloomFilter,
+        ds.CountingBloomFilter,
+        ds.CountMinSketch,
+        ds.CountSketch,
+    ],
 )
 def test_from_bytes_garbage_raises_value_error(cls):
     with pytest.raises(ValueError):
