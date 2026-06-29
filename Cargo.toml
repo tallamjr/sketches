@@ -30,6 +30,11 @@ name = "sketch_benchmarks"
 path = "benchmarks/criterion/sketch_benchmarks.rs"
 harness = false
 
+[[bench]]
+name = "hash_benchmarks"
+path = "benchmarks/criterion/hash_benchmarks.rs"
+harness = false
+
 [features]
 # Enable Python extension bindings
 extension-module = ["pyo3"]
