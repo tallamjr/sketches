@@ -8,7 +8,7 @@
 
 Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservoir Sampling, and more via PyO3.
 
-**[Algorithm Deep Dive](ALGORITHMS.md)**
+**[Algorithm Deep Dive](docs/algorithms.md)**
 
 ## Features
 
@@ -130,6 +130,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for the full methodology, the repro
 - [Usage guide](docs/usage.md)
 - [Design and architecture](docs/design.md)
 - [Benchmarks](docs/benchmarks.md)
+- [Algorithm deep dive](docs/algorithms.md)
 
 ## Roadmap
 
