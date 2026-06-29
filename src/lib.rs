@@ -17,13 +17,15 @@
 //! Rust library (`rlib`) with optional Python bindings via PyO3 (`cdylib`).
 
 #[cfg(feature = "extension-module")]
+use crate::serialization::Serializable;
+#[cfg(feature = "extension-module")]
 use pyo3::PyObject;
 #[cfg(feature = "extension-module")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "extension-module")]
 use pyo3::prelude::*;
 #[cfg(feature = "extension-module")]
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyTuple};
 
 pub mod aod;
 pub mod bloom;
@@ -49,7 +51,7 @@ pub mod serialization;
 
 /// Python binding for CPC sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "CpcSketch")]
+#[pyclass(module = "sketches", name = "CpcSketch")]
 pub struct CpcSketch {
     inner: cpc::CpcSketch,
 }
@@ -91,13 +93,30 @@ impl CpcSketch {
 
     /// Serialize the sketch to bytes.
     pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
-        PyBytes::new(py, &self.inner.to_bytes()).into()
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <cpc::CpcSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(CpcSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
 /// Python binding for HyperLogLog sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HllSketch")]
+#[pyclass(module = "sketches", name = "HllSketch")]
 pub struct HllSketch {
     inner: hll::HllSketch,
 }
@@ -140,13 +159,30 @@ impl HllSketch {
 
     /// Serialize the sketch to bytes.
     pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
-        PyBytes::new(py, &self.inner.to_bytes()).into()
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <hll::HllSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(HllSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
 /// Python binding for HyperLogLog++ sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HllPlusPlusSketch")]
+#[pyclass(module = "sketches", name = "HllPlusPlusSketch")]
 pub struct HllPlusPlusSketch {
     inner: hll::HllPlusPlusSketch,
 }
@@ -189,13 +225,30 @@ impl HllPlusPlusSketch {
 
     /// Serialize the sketch to bytes.
     pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
-        PyBytes::new(py, &self.inner.to_bytes()).into()
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <hll::HllPlusPlusSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(HllPlusPlusSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
     }
 }
 
 /// Python binding for sparse HyperLogLog++ sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HllPlusPlusSparseSketch")]
+#[pyclass(module = "sketches", name = "HllPlusPlusSparseSketch")]
 pub struct HllPlusPlusSparseSketch {
     inner: hll::HllPlusPlusSparseSketch,
 }
@@ -244,7 +297,7 @@ impl HllPlusPlusSparseSketch {
 
 /// Python binding for Theta sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "ThetaSketch")]
+#[pyclass(module = "sketches", name = "ThetaSketch")]
 pub struct ThetaSketch {
     inner: theta::ThetaSketch,
 }
@@ -296,11 +349,33 @@ impl ThetaSketch {
     pub fn sample_capacity(&self) -> usize {
         self.inner.sample_capacity()
     }
+
+    /// Serialize the sketch to bytes (compact, ordered format).
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <theta::ThetaSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(ThetaSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Bloom Filter.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "BloomFilter")]
+#[pyclass(module = "sketches", name = "BloomFilter")]
 pub struct BloomFilter {
     inner: bloom::BloomFilter,
 }
@@ -376,7 +451,7 @@ impl BloomFilter {
 
 /// Python binding for Counting Bloom Filter.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "CountingBloomFilter")]
+#[pyclass(module = "sketches", name = "CountingBloomFilter")]
 pub struct CountingBloomFilter {
     inner: bloom::CountingBloomFilter,
 }
@@ -421,7 +496,7 @@ impl CountingBloomFilter {
 
 /// Python binding for Count-Min Sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "CountMinSketch")]
+#[pyclass(module = "sketches", name = "CountMinSketch")]
 pub struct CountMinSketch {
     inner: countmin::CountMinSketch,
 }
@@ -543,7 +618,7 @@ impl CountMinSketch {
 
 /// Python binding for Count Sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "CountSketch")]
+#[pyclass(module = "sketches", name = "CountSketch")]
 pub struct CountSketch {
     inner: countmin::CountSketch,
 }
@@ -578,7 +653,7 @@ impl CountSketch {
 
 /// Python binding for KLL Sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "KllSketch")]
+#[pyclass(module = "sketches", name = "KllSketch")]
 pub struct KllSketch {
     inner: quantiles::KllSketch<f64>,
 }
@@ -693,11 +768,33 @@ impl KllSketch {
     pub fn q75(&mut self) -> Option<f64> {
         self.quantile(0.75)
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <quantiles::KllSketch<f64> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(KllSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Linear Counter.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "LinearCounter")]
+#[pyclass(module = "sketches", name = "LinearCounter")]
 pub struct LinearCounter {
     inner: linear::LinearCounter,
 }
@@ -793,11 +890,33 @@ impl LinearCounter {
 
         dict.into()
     }
+
+    /// Serialize the counter to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the counter from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <linear::LinearCounter as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(LinearCounter { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Hybrid Counter.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HybridCounter")]
+#[pyclass(module = "sketches", name = "HybridCounter")]
 pub struct HybridCounter {
     inner: linear::HybridCounter,
 }
@@ -874,11 +993,33 @@ impl HybridCounter {
 
         dict.into()
     }
+
+    /// Serialize the counter to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the counter from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <linear::HybridCounter as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(HybridCounter { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Frequent Strings Sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "FrequentStringsSketch")]
+#[pyclass(module = "sketches", name = "FrequentStringsSketch")]
 pub struct FrequentStringsSketch {
     inner: frequent::FrequentStringsSketch,
 }
@@ -1000,11 +1141,33 @@ impl FrequentStringsSketch {
 
         dict.into()
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <frequent::FrequentStringsSketch as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(FrequentStringsSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Reservoir Sampler R.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "ReservoirSamplerR", unsendable)]
+#[pyclass(module = "sketches", name = "ReservoirSamplerR", unsendable)]
 pub struct ReservoirSamplerR {
     inner: sampling::ReservoirSamplerR<String>,
 }
@@ -1057,11 +1220,33 @@ impl ReservoirSamplerR {
         self.inner.merge(&other.inner);
         Ok(())
     }
+
+    /// Serialize the sampler to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sampler from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <sampling::ReservoirSamplerR<String> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(ReservoirSamplerR { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Reservoir Sampler A.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "ReservoirSamplerA", unsendable)]
+#[pyclass(module = "sketches", name = "ReservoirSamplerA", unsendable)]
 pub struct ReservoirSamplerA {
     inner: sampling::ReservoirSamplerA<String>,
 }
@@ -1114,11 +1299,33 @@ impl ReservoirSamplerA {
         self.inner.merge(&other.inner);
         Ok(())
     }
+
+    /// Serialize the sampler to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sampler from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <sampling::ReservoirSamplerA<String> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(ReservoirSamplerA { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Weighted Reservoir Sampler.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "WeightedReservoirSampler", unsendable)]
+#[pyclass(module = "sketches", name = "WeightedReservoirSampler", unsendable)]
 pub struct WeightedReservoirSampler {
     inner: sampling::WeightedReservoirSampler<String>,
 }
@@ -1175,7 +1382,7 @@ impl WeightedReservoirSampler {
 
 /// Python binding for Stream Sampler.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "StreamSampler", unsendable)]
+#[pyclass(module = "sketches", name = "StreamSampler", unsendable)]
 pub struct StreamSampler {
     inner: sampling::StreamSampler<String>,
 }
@@ -1227,11 +1434,33 @@ impl StreamSampler {
 
         dict.into()
     }
+
+    /// Serialize the sampler to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sampler from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <sampling::StreamSampler<String> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(StreamSampler { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for T-Digest.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "TDigest")]
+#[pyclass(module = "sketches", name = "TDigest")]
 pub struct TDigest {
     inner: tdigest::TDigest,
 }
@@ -1372,11 +1601,33 @@ impl TDigest {
     pub fn p999(&self) -> Option<f64> {
         self.quantile(0.999)
     }
+
+    /// Serialize the digest to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the digest from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <tdigest::TDigest as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(TDigest { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Streaming T-Digest.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "StreamingTDigest")]
+#[pyclass(module = "sketches", name = "StreamingTDigest")]
 pub struct StreamingTDigest {
     inner: tdigest::StreamingTDigest,
 }
@@ -1449,7 +1700,7 @@ impl StreamingTDigest {
 
 /// Python binding for Array of Doubles Sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "AodSketch")]
+#[pyclass(module = "sketches", name = "AodSketch")]
 pub struct AodSketch {
     inner: aod::AodSketch,
 }
@@ -1553,6 +1804,15 @@ impl AodSketch {
         Ok(AodSketch { inner })
     }
 
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &self.inner.to_bytes());
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
+
     /// Get entries as list of (hash, values) tuples.
     pub fn get_entries(&self) -> Vec<(u64, Vec<f64>)> {
         self.inner
@@ -1600,7 +1860,7 @@ impl AodSketch {
 
 /// Python binding for REQ (Relative Error Quantiles) sketch.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "ReqSketch")]
+#[pyclass(module = "sketches", name = "ReqSketch")]
 pub struct ReqSketch {
     inner: req::ReqSketch<f64>,
 }
@@ -1670,11 +1930,33 @@ impl ReqSketch {
             req::ReqMode::LRA => "LRA",
         }
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <req::ReqSketch<f64> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(ReqSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for Tuple sketch with double summary.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "TupleSketch")]
+#[pyclass(module = "sketches", name = "TupleSketch")]
 pub struct PyTupleSketch {
     inner: tuple::TupleSketch<tuple::DoubleSummary>,
 }
@@ -1704,11 +1986,33 @@ impl PyTupleSketch {
     pub fn num_retained(&self) -> usize {
         self.inner.num_retained()
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <tuple::TupleSketch<tuple::DoubleSummary> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyTupleSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for VarOpt sampling.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "VarOptSketch")]
+#[pyclass(module = "sketches", name = "VarOptSketch")]
 pub struct PyVarOptSketch {
     inner: varopt::VarOptSketch<String>,
 }
@@ -1755,11 +2059,33 @@ impl PyVarOptSketch {
     pub fn count(&self) -> u64 {
         self.inner.count()
     }
+
+    /// Serialize the sketch to bytes.
+    pub fn to_bytes<'py>(&self, py: Python<'py>) -> PyObject {
+        PyBytes::new(py, &Serializable::to_bytes(&self.inner)).into()
+    }
+
+    /// Deserialize the sketch from bytes.
+    #[staticmethod]
+    pub fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        let inner = <varopt::VarOptSketch<String> as Serializable>::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyVarOptSketch { inner })
+    }
+
+    /// Support pickling via the from_bytes reconstructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        let cls = py.get_type::<Self>();
+        let from_bytes = cls.getattr("from_bytes")?.unbind();
+        let data = PyBytes::new(py, &Serializable::to_bytes(&self.inner));
+        let args = PyTuple::new(py, [data])?.into_any().unbind();
+        Ok((from_bytes, args))
+    }
 }
 
 /// Python binding for HllSketchMode with List/Set/HLL mode transitions.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HllSketchMode")]
+#[pyclass(module = "sketches", name = "HllSketchMode")]
 pub struct PyHllSketchMode {
     inner: hll::HllSketchMode,
 }
@@ -1805,7 +2131,7 @@ impl PyHllSketchMode {
 
 /// Python binding for HllUnion.
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "HllUnion")]
+#[pyclass(module = "sketches", name = "HllUnion")]
 pub struct PyHllUnion {
     inner: hll::HllUnion,
 }
