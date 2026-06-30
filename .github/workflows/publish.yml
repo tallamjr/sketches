@@ -72,10 +72,10 @@ jobs:
       - name: Rust tests
         run: cargo test
 
-      - name: Build Python extension
+      - name: Build and install Python extension
         run: |
-          pip install maturin pytest
-          maturin develop --features extension-module
+          pip install pytest
+          pip install .   # builds via the maturin backend (extension-module per pyproject); no venv needed in CI
 
       - name: Python tests
         run: pytest tests/ -v

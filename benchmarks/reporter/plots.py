@@ -187,7 +187,7 @@ def _grouped_bar(
 
     n_groups = len(labels)
     n_impls = len(impls)
-    bar_width = 0.8 / n_impls
+    bar_width = 0.8 / n_impls if n_impls else 0.8
     indices = list(range(n_groups))
 
     plotted_any = False
@@ -250,7 +250,7 @@ def render_rmse_plot(rows, out_dir):
 
     n_groups = len(sketches)
     n_impls = len(IMPLEMENTATIONS)
-    bar_width = 0.8 / n_impls
+    bar_width = 0.8 / n_impls if n_impls else 0.8
     indices = list(range(n_groups))
 
     for offset, impl in enumerate(IMPLEMENTATIONS):
@@ -444,7 +444,7 @@ def render_latency_plot(rows, out_dir):
 
     n_groups = len(labels)
     n_impls = len(impls)
-    bar_width = 0.8 / n_impls
+    bar_width = 0.8 / n_impls if n_impls else 0.8
     indices = list(range(n_groups))
 
     for offset, impl in enumerate(impls):
