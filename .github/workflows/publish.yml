@@ -7,6 +7,7 @@ on:
       - "Cargo.toml"
   pull_request:
     branches: [master]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -30,7 +31,12 @@ jobs:
           current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           previous=$(git show HEAD~1:Cargo.toml 2>/dev/null | grep '^version' | head -1 | sed 's/.*"\(.*\)"/\1/' || echo "")
           echo "version=$current" >> "$GITHUB_OUTPUT"
-          if [ "$current" != "$previous" ]; then
+          # A manual run (workflow_dispatch) always proceeds, so a release can be
+          # re-triggered on a fixed commit without a version bump.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: proceeding with version $current"
+          elif [ "$current" != "$previous" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Version changed: $previous -> $current"
           else
@@ -132,7 +138,7 @@ jobs:
   # ---------------------------------------------------------------------------
   publish:
     needs: [build-wheels, build-sdist, detect-version-change]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

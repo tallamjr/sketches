@@ -18,6 +18,22 @@ fn init_logging() {
     });
 }
 
+const LINEITEM: &str = "tests/data/lineitem.csv";
+
+/// The TPC-H data is gitignored (generated locally with tpchgen-rs), so it is
+/// absent in a fresh checkout and in CI. These tests skip in that case rather
+/// than fail on a missing file.
+fn lineitem_present() -> bool {
+    if std::path::Path::new(LINEITEM).exists() {
+        true
+    } else {
+        eprintln!(
+            "skipping: {LINEITEM} not present (gitignored TPC-H data; generate it with tpchgen-rs)"
+        );
+        false
+    }
+}
+
 fn load_column(path: &str, column: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)?;
     let headers = rdr.headers()?.clone();
@@ -36,7 +52,10 @@ fn load_column(path: &str, column: &str) -> Result<Vec<String>, Box<dyn Error>> 
 #[test]
 fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     init_logging();
-    let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
+    if !lineitem_present() {
+        return Ok(());
+    }
+    let data = load_column(LINEITEM, "l_orderkey")?;
     let truth: HashSet<_> = data.iter().cloned().collect();
     let true_count = truth.len() as f64;
 
@@ -70,7 +89,10 @@ fn test_cpc_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
     init_logging();
-    let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
+    if !lineitem_present() {
+        return Ok(());
+    }
+    let data = load_column(LINEITEM, "l_orderkey")?;
     let truth: HashSet<_> = data.iter().cloned().collect();
     let true_count = truth.len() as f64;
 
@@ -104,7 +126,10 @@ fn test_hll_on_lineitem_orderkeys() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_theta_union_and_intersection() -> Result<(), Box<dyn Error>> {
     init_logging();
-    let data = load_column("tests/data/lineitem.csv", "l_orderkey")?;
+    if !lineitem_present() {
+        return Ok(());
+    }
+    let data = load_column(LINEITEM, "l_orderkey")?;
     // Partition data into two subsets by alternating entries to ensure overlapping keys
     let mut p1 = Vec::new();
     let mut p2 = Vec::new();
