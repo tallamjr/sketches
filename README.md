@@ -54,14 +54,47 @@ maturin develop
 
 ## Quickstart
 
+Stream a real text through two sketches at once: a HyperLogLog for the distinct word count (a few kilobytes of state, not a full set) and a Frequent Items sketch for the top words. Check the distinct estimate against the truth:
+
 ```python
-from sketches import HllSketch
+import re
+import urllib.request
 
-sketch = HllSketch(lg_k=12)
-for item in ["apple", "banana", "orange", "apple"]:
-    sketch.update(item)
+from sketches import HllSketch, FrequentStringsSketch
 
-print(f"Estimated unique items: {sketch.estimate():.2f}")
+# Download a public-domain book (Alice's Adventures in Wonderland).
+url = "https://www.gutenberg.org/files/11/11-0.txt"
+request = urllib.request.Request(url, headers={"User-Agent": "sketches-quickstart"})
+text = urllib.request.urlopen(request, timeout=30).read().decode("utf-8", "ignore")
+words = re.findall(r"[a-z']+", text.lower())
+
+distinct = HllSketch(lg_k=12)                  # cardinality
+frequent = FrequentStringsSketch(256, False)   # top-k frequency (Space-Saving)
+for word in words:
+    distinct.update(word)
+    frequent.update(word)
+
+exact = len(set(words))
+print(f"Total words processed:  {len(words):,}")
+print(f"Estimated unique words: {distinct.estimate():,.0f}")
+print(f"Actual unique words:    {exact:,}")
+print(f"Relative error:         {abs(distinct.estimate() - exact) / exact:.2%}")
+print("Top 5 words (estimated count):")
+for word, count, _lower, _upper in frequent.get_top_k(5):
+    print(f"  {word:<5} {count:,}")
+```
+
+```text
+Total words processed:  27,439
+Estimated unique words: 2,552
+Actual unique words:    2,579
+Relative error:         1.05%
+Top 5 words (estimated count):
+  the   1,589
+  and   810
+  to    665
+  a     573
+  it    531
 ```
 
 See the [usage guide](docs/usage.md) for every sketch with runnable examples.
