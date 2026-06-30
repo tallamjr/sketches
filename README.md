@@ -37,7 +37,13 @@ Python bindings for Rust-based implementations of HyperLogLog, T-Digest, Reservo
 
 ## Install
 
-The package is not yet published to PyPI (the reserved name is `rusty-sketches`); install from source for now.
+The package is published on PyPI as `rusty-sketches` (the `sketches` name was taken); the import name is `sketches`.
+
+```bash
+pip install rusty-sketches
+```
+
+To build from source instead:
 
 ```bash
 git clone https://github.com/tallamjr/sketches.git
