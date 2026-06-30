@@ -87,7 +87,7 @@ warning (below) are computed from.
 The CI is only as trustworthy as the machine it was measured on. Before taking
 a measurement seriously, settle the host:
 
-- Run on AC power, not battery (CPU governors throttle aggressively on battery).
+- Run on AC power rather than battery (CPU governors throttle aggressively on battery).
 - Close other applications, especially browsers, compilers, and anything doing
   background indexing or sync.
 - Run a single benchmark at a time; do not run two planes (or a build) in
@@ -134,9 +134,9 @@ Each plane measures `live_bytes` with the mechanism native to its runtime:
   `reporter/thresholds.json`. The gate covers the sketches listed there (hll,
   theta, kll, countmin, cpc); Bloom is a membership filter with no cardinality
   estimate, so it is not accuracy-gated. This is the metric that must not regress.
-- Throughput and memory are tracked, not gated. They are recorded, plotted, and
+- Throughput and memory are tracked rather than gated. They are recorded, plotted, and
   compared against committed baselines, but they do not fail the build. They
-  inform tuning (see the hash observation above); they are not a pass/fail bar.
+  inform tuning (see the hash observation above) and carry no pass/fail bar.
 
 ## Running
 

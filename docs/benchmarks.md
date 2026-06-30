@@ -6,7 +6,7 @@ All figures come from the stabilised harness in `benchmarks/`: throughput is the
 
 ## Performance
 
-**Accuracy is measured by multi-trial RMSE, not single runs.** A single accuracy comparison against Apache is statistically meaningless: the spread between trials is larger than the gap between implementations. Earlier versions of the documentation quoted single-run figures, which have been removed. The numbers below come from the benchmark harness running 100 trials of 100,000 distinct items at `lg_k = 12` (4096 registers), and are regenerable with `make -C benchmarks rmse`.
+**Accuracy is measured by multi-trial RMSE across many runs.** A single accuracy comparison against Apache is statistically meaningless: the spread between trials is larger than the gap between implementations. Earlier versions of the documentation quoted single-run figures, which have been removed. The numbers below come from the benchmark harness running 100 trials of 100,000 distinct items at `lg_k = 12` (4096 registers), and are regenerable with `make -C benchmarks rmse`.
 
 ### Accuracy (multi-trial RMSE)
 
@@ -38,7 +38,7 @@ Throughput is now measured on a stabilised harness: each figure is the median ov
 | CPC      | about 1.3x ahead     | about 1.9x ahead    |
 | Bloom    | about 0.96x (near parity) | about 4.0x ahead |
 
-These multipliers come from a single representative run on one machine. They vary run to run, so the robust claim is the direction (we lead Apache, except synthetic Bloom which is at parity, slightly behind Apache C++) rather than the exact factor. Synthetic Bloom is the one sketch where we do not lead Apache C++ on integers: at about 0.96x it is a touch behind, so it is reported as parity, not a win.
+These multipliers come from a single representative run on one machine. They vary run to run, so the robust claim is the direction (we lead Apache, except synthetic Bloom which is at parity, slightly behind Apache C++) rather than the exact factor. Synthetic Bloom is the one sketch where we do not lead Apache C++ on integers: at about 0.96x it is a touch behind, so it is reported as parity.
 
 ![Throughput by sketch and implementation](../assets/benchmarks/throughput.png)
 

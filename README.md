@@ -60,7 +60,7 @@ maturin develop
 
 ## Quickstart
 
-Stream a real text through two sketches at once: a HyperLogLog for the distinct word count (a few kilobytes of state, not a full set) and a Frequent Items sketch for the top words. Check the distinct estimate against the truth:
+Stream a real text through two sketches at once: a HyperLogLog for the distinct word count (a few kilobytes of state instead of a full set) and a Frequent Items sketch for the top words. Check the distinct estimate against the truth:
 
 ```python
 import re

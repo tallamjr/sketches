@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md)
 
-This library stands on a large body of prior work. This page sets out the main alternatives, how `sketches` relates to each, and where it is and is not differentiated. The intent is honest positioning, not marketing: where established libraries lead, that is stated plainly.
+This library stands on a large body of prior work. This page sets out the main alternatives, how `sketches` relates to each, and where it is and is not differentiated, stating plainly where established libraries lead.
 
 ## Apache DataSketches (the reference)
 
@@ -13,7 +13,7 @@ Where it leads `sketches`, decisively:
 - Language reach: Java, C++, Python, Rust and Go, versus this crate's single Rust core with Python bindings.
 - Byte-compatible interchange: a sketch built in one language serialises and is read, merged and queried in another (same-endianness). This crate uses its own compact little-endian codec and is deliberately not byte-compatible.
 - Production track record and ecosystem: deep integrations including Apache Druid, Hive, Pig, Pinot and a PostgreSQL extension ([apache/datasketches-postgresql](https://github.com/apache/datasketches-postgresql)).
-- Institutional backing: maintained by the ASF, not a single-author project.
+- Institutional backing: maintained by the ASF rather than a single author.
 
 Its Python package ([pypi `datasketches`](https://pypi.org/project/datasketches/), source [apache/datasketches-python](https://github.com/apache/datasketches-python)) is a Nanobind binding over the C++ core, so its Python API mirrors C++. This crate, by contrast, exposes a native Rust implementation through PyO3.
 
@@ -35,11 +35,11 @@ The differentiator for `sketches` among Rust crates is breadth: it consolidates 
 
 ## Database-embedded implementations
 
-Cardinality and quantile sketches are also embedded directly in data systems: Redis (HyperLogLog, and Bloom via RedisBloom), ClickHouse (the `uniq*` and quantile-sketch functions), PostgreSQL (`postgresql-hll` and the Apache `datasketches-postgresql` extension), and the DataSketches integrations in Apache Druid and Spark. These are a different product category (engine-embedded, not a standalone library), and a frontier where `sketches` has no presence.
+Cardinality and quantile sketches are also embedded directly in data systems: Redis (HyperLogLog, and Bloom via RedisBloom), ClickHouse (the `uniq*` and quantile-sketch functions), PostgreSQL (`postgresql-hll` and the Apache `datasketches-postgresql` extension), and the DataSketches integrations in Apache Druid and Spark. These are a different product category (engine-embedded rather than a standalone library), and a frontier where `sketches` has no presence.
 
-## Honest positioning
+## Positioning
 
-- Genuinely differentiated: the breadth of the four sketch families plus sampling and t-digest in one actively maintained, native-Rust crate, exposed to Python through PyO3, with xxh3 hashing and an interval-reported, multi-trial-RMSE accuracy methodology.
+- Differentiated: the breadth of the four sketch families plus sampling and t-digest in one actively maintained, native-Rust crate, exposed to Python through PyO3, with xxh3 hashing and an interval-reported, multi-trial-RMSE accuracy methodology.
 - Where established libraries lead: Apache DataSketches wins on language reach, byte-compatible interchange, ASF backing, production integrations and breadth-with-maturity; `datasketch` leads on similarity search (MinHash and LSH), which this crate does not yet implement.
 - Deliberate non-goal: byte compatibility with Apache DataSketches. This crate uses its own compact codec, trading interchange for a uniform internal format.
 
